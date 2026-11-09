@@ -55,6 +55,7 @@ struct Mock {
     send_status: Arc<AtomicU16>,
     send_body: Arc<Mutex<Value>>,
     list_queue: Arc<Mutex<VecDeque<(u16, Value)>>>,
+    pairing_token: Arc<Mutex<String>>,
 }
 
 impl Mock {
@@ -72,6 +73,7 @@ impl Mock {
             send_status: Arc::new(AtomicU16::new(200)),
             send_body: Arc::new(Mutex::new(json!({ "promptDispatched": true }))),
             list_queue: Arc::new(Mutex::new(VecDeque::new())),
+            pairing_token: Arc::new(Mutex::new("oc_client_paired".into())),
         }
     }
 
@@ -260,7 +262,10 @@ async fn mock_pairing(
     Json(payload): Json<Value>,
 ) -> Response {
     mock.record("POST", "/api/client-auth/pairing/redeem", &headers, payload);
-    response(200, json!({"clientToken":"oc_client_paired"}))
+    response(
+        200,
+        json!({"clientToken": *mock.pairing_token.lock().unwrap_or_else(|error| error.into_inner())}),
+    )
 }
 
 async fn start_mock() -> (String, Mock) {
@@ -1518,6 +1523,83 @@ async fn changing_url_requires_a_new_token_and_does_not_redirect_the_old_one() {
     assert_eq!(changed.status, StatusCode::BAD_REQUEST);
     assert_eq!(app.state.openchamber().unwrap().url(), url);
     assert!(other.requests().is_empty());
+}
+
+#[tokio::test]
+async fn pairing_rejects_invalid_configured_url_before_redeeming() {
+    let app = TestApp::new(Some("file:///etc/passwd")).await;
+    let cookie = app.login().await;
+    let result = app
+        .post(
+            "/api/integration/openchamber/regenerate",
+            Some(json!({"link":"not a link"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(result.status, StatusCode::BAD_REQUEST);
+    assert!(result.body.to_string().contains("OpenChamber URL"));
+}
+
+#[tokio::test]
+async fn pairing_link_is_rejected_as_client_token() {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let (url, mock) = start_mock().await;
+    let app = TestApp::new(Some(&url)).await;
+    let cookie = app.login().await;
+    let link = "openchamber://connect?v=2&p=e30";
+    let result = app
+        .request(
+            Method::PUT,
+            "/api/integration/openchamber",
+            Some(json!({"url":url,"token":link})),
+            Some(&cookie),
+            Some(ORIGIN),
+        )
+        .await;
+    assert_eq!(result.status, StatusCode::BAD_REQUEST);
+    assert!(result.body.to_string().contains("oc_client_"));
+    let plain = app
+        .request(
+            Method::PUT,
+            "/api/integration/openchamber",
+            Some(json!({"url":url,"token":"plain_token"})),
+            Some(&cookie),
+            Some(ORIGIN),
+        )
+        .await;
+    assert_eq!(plain.status, StatusCode::BAD_REQUEST);
+    *mock
+        .pairing_token
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = link.into();
+    let encoded = URL_SAFE_NO_PAD.encode(json!({"pairingId":"id","secret":"secret"}).to_string());
+    let result = app
+        .post(
+            "/api/integration/openchamber/regenerate",
+            Some(json!({"link":format!("openchamber://connect?v=2&p={encoded}")})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(result.status, StatusCode::BAD_GATEWAY);
+    assert!(result
+        .body
+        .to_string()
+        .contains("Invalid OpenChamber client token"));
+    assert!(mock
+        .requests()
+        .iter()
+        .any(|r| r.path == "/api/client-auth/pairing/redeem"));
+    app.post("/api/integration/openchamber/test", None, &cookie)
+        .await;
+    assert_eq!(
+        mock.list_requests()
+            .last()
+            .unwrap()
+            .authorization
+            .as_deref(),
+        Some(&format!("Bearer {TOKEN}")[..])
+    );
+    assert!(!app._dir.path().join("openchamber-connection.json").exists());
 }
 
 #[tokio::test]

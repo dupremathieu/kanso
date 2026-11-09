@@ -40,9 +40,15 @@ pub(crate) fn load(state: &AppState) -> Result<(), String> {
             path.display()
         )
     })?;
-    validate(&settings.url, &settings.token).map_err(|_| {
+    validate_url(&settings.url).map_err(|_| {
         format!(
-            "invalid OpenChamber settings at {}; check the private settings file",
+            "invalid OpenChamber settings at {}; URL must be HTTP(S) without credentials, query or fragment",
+            path.display()
+        )
+    })?;
+    validate_token(&settings.token).map_err(|_| {
+        format!(
+            "invalid OpenChamber settings at {}; client token must start with oc_client_, be at most 4096 bytes, and contain no whitespace or control characters",
             path.display()
         )
     })?;
@@ -51,6 +57,11 @@ pub(crate) fn load(state: &AppState) -> Result<(), String> {
 }
 
 fn validate(url: &str, token: &str) -> Result<(), ApiError> {
+    validate_url(url)?;
+    validate_token(token)
+}
+
+fn validate_url(url: &str) -> Result<(), ApiError> {
     let uri: axum::http::Uri = url
         .parse()
         .map_err(|_| ApiError::validation("invalid OpenChamber URL"))?;
@@ -64,11 +75,15 @@ fn validate(url: &str, token: &str) -> Result<(), ApiError> {
             "OpenChamber URL must be an HTTP(S) URL without credentials, query or fragment",
         ));
     }
-    if token.is_empty()
+    Ok(())
+}
+
+fn validate_token(token: &str) -> Result<(), ApiError> {
+    if !token.starts_with("oc_client_")
         || token.len() > 4096
         || token.chars().any(|c| c.is_whitespace() || c.is_control())
     {
-        return Err(ApiError::validation("invalid OpenChamber token"));
+        return Err(ApiError::validation("OpenChamber client token must start with oc_client_, be at most 4096 bytes, and contain no whitespace or control characters"));
     }
     Ok(())
 }
@@ -157,6 +172,7 @@ pub async fn regenerate(
         )
     })?;
     let url = adapter.url().to_owned();
+    validate_url(&url)?;
     let token = crate::adapter::openchamber_pairing::redeem(url.clone(), input.link)
         .await
         .map_err(|message| match message {
@@ -166,7 +182,11 @@ pub async fn regenerate(
             }
             _ => ApiError::service_unavailable("pairing_failed", message),
         })?;
-    validate(&url, &token)?;
+    validate_token(&token).map_err(|_| {
+        ApiError::bad_gateway(
+            "Invalid OpenChamber client token in pairing response; create a new pairing link",
+        )
+    })?;
     save(state, StoredSettings { url, token }, guard).await
 }
 
