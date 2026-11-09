@@ -318,6 +318,8 @@ pub enum MoveTarget {
     Blocker,
     #[value(name = "done")]
     Done,
+    #[value(name = "dropped")]
+    Dropped,
     #[value(name = "restore")]
     Restore,
 }
@@ -331,6 +333,7 @@ impl MoveTarget {
             Self::InReview => Some("in_review"),
             Self::Blocker => Some("blocker"),
             Self::Done => Some("done"),
+            Self::Dropped => Some("dropped"),
             Self::Restore => None,
         }
     }

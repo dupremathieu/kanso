@@ -12,7 +12,7 @@ running, testing and configuring the project.
 
 ## Features
 
-- Project boards with six fixed columns, drag & drop, a global cross-project
+- Project boards with seven fixed columns, drag & drop, a global cross-project
   view and a proposal inbox.
 - Cards with Markdown descriptions, labels, due dates, checklists, comments,
   dependencies, claims and an activity log.
@@ -379,6 +379,9 @@ that column, an explicit `status` wins over `restore`, and a move with neither
 clears `blocked_from`/`blocked_reason` while keeping the card in `blocker` —
 unless it sends `reason`, which updates `blocked_reason` in place and keeps
 `blocked_from`. Entering `done` sets `done_at`; leaving it clears the timestamp.
+Humans may move abandoned tasks to `dropped` and reopen them later. Dropped
+tasks do not satisfy dependencies and cannot be created or accepted directly
+into that status. Dispatching one reopens it in `in_progress`.
 
 A card in `blocker` shows its `blocked_reason` as the agent's question. The human
 answers with `POST /api/tasks/:ref/reply`: Kanso stores the answer as an ordinary
@@ -443,15 +446,16 @@ Accepting or rejecting a card that is not proposed returns `409 not_proposed`.
 
 `GET /api/projects/:id_or_key/board` returns `{project, columns}` and
 `GET /api/board` returns `{projects:[{project,columns}]}`. `columns` always has
-`backlog`, `todo`, `in_progress`, `in_review`, `blocker` and `done`; each array
+`backlog`, `todo`, `in_progress`, `in_review`, `blocker`, `done` and `dropped`; each array
 contains active cards ordered by `rank` then `number`. A card carries `id`,
 `reference`, `title`, `status`, `priority`, `due_date`, `labels`, `claimed_by`,
 `attention`, `session_status`, `blocked_from`, `blocked_reason`, `checklist_done`,
 `checklist_total` and `blocked` (an unfinished `blocked_by` card) — not the full
 detail. The checklist counters and `blocked` flag are additions needed by the
 web cards, which show `2/3` progress and a lock without fetching every detail.
-The global view lists active projects in `position` order; `?project=` resolves
-one project (archived or not).
+The global view hides Dropped and its cards (the unfiltered global API returns
+an empty `dropped` array). It lists active projects in `position` order;
+`?project=` resolves one project (archived or not), including its dropped cards.
 
 ### Events
 

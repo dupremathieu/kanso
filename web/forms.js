@@ -505,7 +505,7 @@ export function openProjectForm({ project = null, onSaved }) {
 
 export function openMoveMenu(task, onChoose) {
   const buttons = [];
-  for (const value of ["backlog", "todo", "in_progress", "in_review", "blocker", "done"]) {
+  for (const value of ["backlog", "todo", "in_progress", "in_review", "blocker", "done", "dropped"]) {
     if (value === task.status) continue;
     buttons.push(
       el(

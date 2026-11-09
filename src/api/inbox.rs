@@ -55,6 +55,11 @@ pub async fn accept(
         Some(status) => validate_status(status)?,
         None => "backlog".to_owned(),
     };
+    if status == "dropped" {
+        return Err(ApiError::validation(
+            "proposals cannot be accepted into dropped",
+        ));
+    }
     let actor = auth.0.actor().to_owned();
     let now = now_millis();
 

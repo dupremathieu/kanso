@@ -118,6 +118,7 @@ export const messages = {
   "status.in_review": "In review",
   "status.blocker": "Blocker",
   "status.done": "Done",
+  "status.dropped": "Dropped",
 
   "priority.low": "Low",
   "priority.normal": "Normal",

@@ -23,7 +23,7 @@ import {
   openMoveMenu
 } from "./forms.js?v={{VERSION}}";
 
-const STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocker", "done"];
+const STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocker", "done", "dropped"];
 const PRIORITIES = ["low", "normal", "high"];
 
 function statusLabel(status) {

@@ -109,6 +109,7 @@ pub async fn global(
     let boards = state
         .db
         .call(move |connection| {
+            let global_view = query.project.is_none();
             let projects = if let Some(reference) = &query.project {
                 let Some(project) = project_by_ref(connection, reference)? else {
                     return Ok(None);
@@ -127,7 +128,11 @@ pub async fn global(
 
             let mut boards = Vec::with_capacity(projects.len());
             for project in projects {
-                boards.push(load_board(connection, project)?);
+                let mut board = load_board(connection, project)?;
+                if global_view {
+                    board.columns.dropped.clear();
+                }
+                boards.push(board);
             }
             Ok(Some(GlobalBoard { projects: boards }))
         })
