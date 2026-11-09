@@ -175,19 +175,22 @@ pub async fn regenerate(
     validate_url(&url)?;
     let token = crate::adapter::openchamber_pairing::redeem(url.clone(), input.link)
         .await
-        .map_err(|message| match message {
-            "Invalid pairing link" => ApiError::validation(message),
-            "OpenChamber rejected pairing; create a new pairing link" => {
-                ApiError::bad_gateway(message)
-            }
-            _ => ApiError::service_unavailable("pairing_failed", message),
-        })?;
+        .map_err(pairing_error)?;
     validate_token(&token).map_err(|_| {
         ApiError::bad_gateway(
             "Invalid OpenChamber client token in pairing response; create a new pairing link",
         )
     })?;
     save(state, StoredSettings { url, token }, guard).await
+}
+
+fn pairing_error(message: &'static str) -> ApiError {
+    use crate::adapter::openchamber_pairing::{INVALID_LINK, INVALID_RESPONSE, REJECTED};
+    match message {
+        INVALID_LINK => ApiError::validation(message),
+        REJECTED | INVALID_RESPONSE => ApiError::bad_gateway(message),
+        _ => ApiError::service_unavailable("pairing_failed", message),
+    }
 }
 
 #[derive(Serialize)]

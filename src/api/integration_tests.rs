@@ -1,4 +1,4 @@
-use super::{load, update, UpdateSettings};
+use super::{load, pairing_error, update, UpdateSettings};
 use crate::adapter::openchamber::OpenChamber;
 use crate::api::{ApiJson, Auth};
 use crate::auth::{AuthConfig, Identity, IdentityKind, Scope};
@@ -22,6 +22,30 @@ fn human() -> Auth {
         session_id: None,
         token_id: None,
     })
+}
+
+#[test]
+fn pairing_errors_map_to_actionable_http_statuses() {
+    use crate::adapter::openchamber_pairing::{
+        INVALID_LINK, INVALID_RESPONSE, RATE_LIMITED, READ_FAILURE, REJECTED, UNREACHABLE,
+        UPSTREAM_FAILURE,
+    };
+    use axum::http::StatusCode;
+    assert_eq!(
+        pairing_error(INVALID_LINK).status(),
+        StatusCode::BAD_REQUEST
+    );
+    for message in [REJECTED, INVALID_RESPONSE] {
+        assert_eq!(pairing_error(message).status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(pairing_error(message).code(), "openchamber_error");
+    }
+    for message in [RATE_LIMITED, UPSTREAM_FAILURE, READ_FAILURE, UNREACHABLE] {
+        assert_eq!(
+            pairing_error(message).status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(pairing_error(message).code(), "pairing_failed");
+    }
 }
 
 #[tokio::test]
