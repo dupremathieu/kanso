@@ -1,7 +1,7 @@
 // Fetch wrapper for the Kanso API. Every failure surfaces the server's error
 // envelope as an ApiError with `status` and `code`.
 
-import { t } from "./i18n/index.js";
+import { t } from "./i18n/index.js?v={{VERSION}}";
 
 export class ApiError extends Error {
   constructor(message, { code = "error", status = 0, body = null } = {}) {

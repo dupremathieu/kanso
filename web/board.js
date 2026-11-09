@@ -3,8 +3,8 @@
 // No library, no HTML strings: every card is built with DOM nodes. The drag
 // interaction uses pointer events only, with a long press for touch.
 
-import { t } from "./i18n/index.js";
-import { el, icon, isOverdue, formatDue } from "./dom.js";
+import { t } from "./i18n/index.js?v={{VERSION}}";
+import { el, icon, isOverdue, formatDue } from "./dom.js?v={{VERSION}}";
 
 export const STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocker", "done"];
 const ACTIVE_STATUSES = ["in_progress", "in_review", "blocker"];

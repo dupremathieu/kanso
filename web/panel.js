@@ -1,9 +1,9 @@
 // The right panel (layout B): card details, editors, checklist, comments,
 // dependencies, activity and lifecycle actions.
 
-import { t } from "./i18n/index.js";
-import { sourceLink } from "./imports.js";
-import { api } from "./api.js";
+import { t } from "./i18n/index.js?v={{VERSION}}";
+import { sourceLink } from "./imports.js?v={{VERSION}}";
+import { api } from "./api.js?v={{VERSION}}";
 import {
   el,
   icon,
@@ -14,14 +14,14 @@ import {
   isOverdue,
   toast,
   toastForError
-} from "./dom.js";
+} from "./dom.js?v={{VERSION}}";
 import {
   confirmDialog,
   copyText,
   openDispatchDialog,
   openLabelForm,
   openMoveMenu
-} from "./forms.js";
+} from "./forms.js?v={{VERSION}}";
 
 const STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocker", "done"];
 const PRIORITIES = ["low", "normal", "high"];

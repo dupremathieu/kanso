@@ -1,7 +1,7 @@
 // Device material is held only in this screen's DOM and transient closures.
-import { api } from "./api.js";
-import { el } from "./dom.js";
-import { t } from "./i18n/index.js";
+import { api } from "./api.js?v={{VERSION}}";
+import { el } from "./dom.js?v={{VERSION}}";
+import { t } from "./i18n/index.js?v={{VERSION}}";
 
 const fallback = t("github.fallback");
 const descriptions = {

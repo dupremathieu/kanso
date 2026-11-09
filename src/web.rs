@@ -115,14 +115,35 @@ fn asset_response(path: &Path, bytes: Vec<u8>) -> Response {
     (
         [
             (header::CONTENT_TYPE, content_type(path)),
-            // Assets are not content-hashed yet, so never cache them across a
-            // deploy. Revisit when the UI introduces fingerprinted URLs.
+            // The shell pins every module URL to the served version, so an
+            // old cached page can never mix modules from two releases. Keep
+            // revalidation for direct requests and future non-versioned assets.
             (header::CACHE_CONTROL, "no-cache"),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
-        bytes,
+        version_substituted(path, bytes),
     )
         .into_response()
+}
+
+/// Replace `{{VERSION}}` in ES modules so their relative imports carry the
+/// same version as `index.html` and `app.js`.
+fn version_substituted(path: &Path, bytes: Vec<u8>) -> Vec<u8> {
+    let is_script = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "js" | "mjs"));
+    if !is_script {
+        return bytes;
+    }
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        return bytes;
+    };
+    if !text.contains("{{VERSION}}") {
+        return bytes;
+    }
+    text.replace("{{VERSION}}", env!("CARGO_PKG_VERSION"))
+        .into_bytes()
 }
 
 fn content_type(path: &Path) -> &'static str {
@@ -273,6 +294,25 @@ mod tests {
             Some("text/javascript; charset=utf-8")
         );
         assert_eq!(body_text(response).await, "console.log('kanso');");
+    }
+
+    #[tokio::test]
+    async fn module_imports_carry_the_served_version() {
+        let dir = TempDir::new();
+        let web = dir.path().join("web");
+        std::fs::create_dir_all(&web).expect("create web directory");
+        std::fs::write(web.join("index.html"), "<h1>Kanso {{VERSION}}</h1>").expect("write index");
+        std::fs::write(
+            web.join("module.js"),
+            "import { api } from \"./api.js?v={{VERSION}}\";\n",
+        )
+        .expect("write module");
+
+        let response = get(app(&dir), "/module.js").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_text(response).await;
+        assert!(body.contains(&format!("?v={}", env!("CARGO_PKG_VERSION"))));
+        assert!(!body.contains("{{VERSION}}"));
     }
 
     #[tokio::test]
