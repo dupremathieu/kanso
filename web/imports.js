@@ -1,6 +1,6 @@
-import { api } from "./api.js";
-import { el } from "./dom.js";
-import { t } from "./i18n/index.js";
+import { api } from "./api.js?v={{VERSION}}";
+import { el } from "./dom.js?v={{VERSION}}";
+import { t } from "./i18n/index.js?v={{VERSION}}";
 
 // Source links are external, untrusted input, even when a provider is trusted.
 export function sourceLink(url) {

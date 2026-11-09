@@ -1,8 +1,8 @@
 // Modal dialogs and the create/edit forms.
 
-import { t } from "./i18n/index.js";
-import { api } from "./api.js";
-import { el, icon, iconButton, toast, toastForError } from "./dom.js";
+import { t } from "./i18n/index.js?v={{VERSION}}";
+import { api } from "./api.js?v={{VERSION}}";
+import { el, icon, iconButton, toast, toastForError } from "./dom.js?v={{VERSION}}";
 
 const modalStack = [];
 

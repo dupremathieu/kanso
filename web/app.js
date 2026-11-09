@@ -1,7 +1,7 @@
 // Kanso web shell: routing, store, live events and keyboard shortcuts.
 
-import { t } from "./i18n/index.js";
-import { api, setUnauthorizedHandler } from "./api.js";
+import { t } from "./i18n/index.js?v={{VERSION}}";
+import { api, ApiError, setUnauthorizedHandler } from "./api.js?v={{VERSION}}";
 import {
   el,
   icon,
@@ -11,11 +11,11 @@ import {
   toast,
   toastForError,
   relativeTime
-} from "./dom.js";
-import { createBoardView } from "./board.js";
-import { Panel } from "./panel.js";
-import { renderImports } from "./imports.js";
-import { githubSettings } from "./github-settings.js";
+} from "./dom.js?v={{VERSION}}";
+import { createBoardView } from "./board.js?v={{VERSION}}";
+import { Panel } from "./panel.js?v={{VERSION}}";
+import { renderImports } from "./imports.js?v={{VERSION}}";
+import { githubSettings } from "./github-settings.js?v={{VERSION}}";
 import {
   openCardForm,
   openProjectForm,
@@ -25,7 +25,7 @@ import {
   hasModal,
   closeAllModals,
   openModal
-} from "./forms.js";
+} from "./forms.js?v={{VERSION}}";
 
 const LS = {
   lastProject: "kanso.lastProject",
@@ -844,7 +844,14 @@ function showLoadError(error) {
           type: "button",
           class: "button button-secondary",
           onClick: () => {
-            renderRoute().catch(() => {});
+            // A runtime error usually means the loaded modules are stale or
+            // incompatible; only a full document reload fetches the current
+            // versioned module set. API failures can be retried in place.
+            if (error instanceof ApiError) {
+              renderRoute().catch(() => {});
+            } else {
+              window.location.reload();
+            }
           }
         },
         [el("span", { text: t("common.tryAgain") })]

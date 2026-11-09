@@ -181,7 +181,11 @@ fn web_scripts(root: &Path) -> Vec<String> {
             let path = entry.path();
             if path.is_dir() {
                 walk(root, &path, scripts);
-            } else if path.extension().and_then(|value| value.to_str()) == Some("js") {
+            } else if path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "js" | "mjs"))
+            {
                 let relative = path
                     .strip_prefix(root)
                     .expect("web path")
@@ -238,8 +242,48 @@ async fn shell_and_every_module_are_served() {
             assert_eq!(content_type, "text/css; charset=utf-8", "{module}");
         } else {
             assert_eq!(content_type, "text/javascript; charset=utf-8", "{module}");
+            let script = String::from_utf8(body).expect("utf-8 script");
+            assert!(
+                !script.contains("{{VERSION}}"),
+                "unreplaced version placeholder in {module}"
+            );
         }
     }
+}
+
+#[test]
+fn every_relative_module_import_is_version_pinned() {
+    let root = repository_web_dir();
+    let mut checked = 0;
+    for script in web_scripts(&root) {
+        let path = root.join(script.trim_start_matches('/'));
+        let source = std::fs::read_to_string(&path).expect("read web script");
+        for marker in [
+            "from \"",
+            "from '",
+            "import \"",
+            "import '",
+            "import(\"",
+            "import('",
+        ] {
+            let quote = if marker.ends_with('\'') { '\'' } else { '"' };
+            let mut rest = source.as_str();
+            while let Some(start) = rest.find(marker) {
+                let after = &rest[start + marker.len()..];
+                let end = after.find(quote).expect("unterminated module specifier");
+                let specifier = &after[..end];
+                if specifier.starts_with("./") || specifier.starts_with("../") {
+                    checked += 1;
+                    assert!(
+                        specifier.ends_with("?v={{VERSION}}"),
+                        "{script} imports a module without a version: {specifier}"
+                    );
+                }
+                rest = &after[end + 1..];
+            }
+        }
+    }
+    assert!(checked > 0, "no relative module imports were checked");
 }
 
 #[tokio::test]
