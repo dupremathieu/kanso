@@ -35,7 +35,7 @@ async fn stored_connection_survives_restart_and_overrides_environment() {
         human(),
         ApiJson(UpdateSettings {
             url: "http://stored".into(),
-            token: Some("stored_token".into()),
+            token: Some("oc_client_stored".into()),
         }),
     )
     .await
@@ -56,5 +56,25 @@ async fn stored_connection_survives_restart_and_overrides_environment() {
         state(&dir).with_openchamber(OpenChamber::new("http://other-env", "other_token"));
     load(&restarted).unwrap();
     assert_eq!(restarted.openchamber().unwrap().url(), "http://stored");
-    assert_eq!(restarted.openchamber().unwrap().token(), "stored_token");
+    assert_eq!(restarted.openchamber().unwrap().token(), "oc_client_stored");
+}
+
+#[test]
+fn invalid_stored_token_fails_startup() {
+    let dir = TempDir::new();
+    let app = state(&dir).with_openchamber(OpenChamber::new("http://environment", "env_token"));
+    for token in ["openchamber://connect?v=2&p=e30", "stored_token"] {
+        std::fs::write(
+            dir.path().join("openchamber-connection.json"),
+            serde_json::json!({"url":"http://stored","token":token}).to_string(),
+        )
+        .unwrap();
+        assert!(load(&app).unwrap_err().contains("client token"));
+    }
+    std::fs::write(
+        dir.path().join("openchamber-connection.json"),
+        r#"{"url":"file:///bad","token":"oc_client_valid"}"#,
+    )
+    .unwrap();
+    assert!(load(&app).unwrap_err().contains("URL must be HTTP(S)"));
 }
