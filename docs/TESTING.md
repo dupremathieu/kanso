@@ -158,8 +158,8 @@ On one card, verify in order:
    lock and claiming it returns a `dependency_unmet` toast. Remove it from
    `ALP-1`'s **Blocked by** list, then add it again and remove it from
    `ALP-2`'s **Blocks** list; both directions have separate code paths.
-7. Claim / Release: claim an unclaimed backlog/todo card; it moves to In progress
-   and shows the claim badge. Release it.
+7. Claim / Release: claim an unclaimed backlog/todo card; it stays in its column
+   and shows the claim badge. Release it. Agent claims move to In progress.
 8. Archive the card: it leaves the board but the panel stays usable and offers
    **Restore**. Restore it. Delete a throwaway card and confirm the confirmation
    dialog; it disappears everywhere.
