@@ -1521,9 +1521,11 @@ async function renderSettingsIntegration(token) {
     const test = el("button", { type: "button", class: "button", text: t("settings.integrationTest") });
     test.disabled = !enabled;
     const pairingInput = el("input", { class: "input", type: "password", autocomplete: "off", "aria-label": t("settings.integrationPairingLink"), placeholder: t("settings.integrationPairingLink") });
-    pairingInput.hidden = true;
     const regenerate = el("button", { type: "button", class: "button", text: t("settings.integrationRegenerate") });
     regenerate.disabled = !enabled;
+    pairingInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); if (!regenerate.disabled) regenerate.click(); }
+    });
     urlInput.addEventListener("input", () => {
       if (enabled && urlInput.value.trim().replace(/\/$/, "") !== (info.url || "").replace(/\/$/, "")) {
         tokenInput.hidden = false;
@@ -1542,7 +1544,8 @@ async function renderSettingsIntegration(token) {
       integrationRow(t("settings.integrationUrl"), urlInput),
       integrationRow(t("settings.integrationToken"), el("div", {}, [tokenInput, replace])),
       el("p", { class: "field-hint", text: t("settings.integrationMintHint") }),
-      el("div", {}, [save, test, regenerate]), pairingInput, result
+      el("div", {}, [save, test, regenerate]), pairingInput,
+      el("p", { class: "field-hint", text: t("settings.integrationPairingHint") }), result
     ]);
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -1563,18 +1566,18 @@ async function renderSettingsIntegration(token) {
       finally { test.disabled = false; }
     });
     regenerate.addEventListener("click", async () => {
-      if (pairingInput.hidden) {
-        pairingInput.hidden = false;
-        pairingInput.focus();
-        result.textContent = t("settings.integrationPairingHint");
+      if (!pairingInput.value.trim()) { result.textContent = t("settings.integrationPairingRequired"); return; }
+      let expiry;
+      try { expiry = pairingLinkExpiry(pairingInput.value.trim()); }
+      catch { result.textContent = t("settings.integrationPairingMalformed"); return; }
+      if (expiry && expiry.getTime() < Date.now()) {
+        result.textContent = t("settings.integrationPairingExpired", { time: expiry.toLocaleString() });
         return;
       }
-      if (!pairingInput.value.trim()) { result.textContent = t("settings.integrationPairingHint"); return; }
       regenerate.disabled = true;
       try {
         await api.regenerateOpenChamber(pairingInput.value.trim());
         pairingInput.value = "";
-        pairingInput.hidden = true;
         result.textContent = t("settings.integrationRegenerated");
       } catch (error) { pairingInput.value = ""; result.textContent = error.message; }
       finally { regenerate.disabled = false; }
@@ -1586,6 +1589,25 @@ async function renderSettingsIntegration(token) {
     if (state.routeToken !== token) return;
     if (error.status !== 401) showLoadError(error);
   }
+}
+
+function pairingLinkExpiry(link) {
+  const url = new URL(link);
+  const versions = url.searchParams.getAll("v");
+  const payloads = url.searchParams.getAll("p");
+  if (url.protocol !== "openchamber:" || url.host !== "connect" || url.username || url.password ||
+      versions.length !== 1 || versions[0] !== "2" || payloads.length !== 1 ||
+      !/^[A-Za-z0-9_-]+$/.test(payloads[0])) throw new Error("Invalid pairing link");
+  const encoded = payloads[0].replace(/-/g, "+").replace(/_/g, "/");
+  const bytes = Uint8Array.from(atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
+  const payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  if (!payload || typeof payload.pairingId !== "string" || !payload.pairingId ||
+      typeof payload.secret !== "string" || !payload.secret) throw new Error("Invalid pairing link");
+  if (payload.expiresAt === undefined) return null;
+  if (typeof payload.expiresAt !== "string" && typeof payload.expiresAt !== "number") throw new Error("Invalid pairing link");
+  const expiry = new Date(payload.expiresAt);
+  if (Number.isNaN(expiry.getTime())) throw new Error("Invalid pairing link");
+  return expiry;
 }
 
 function downloadBlob(blob, filename) {

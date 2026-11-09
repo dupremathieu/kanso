@@ -8,6 +8,7 @@ cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 node tests/imports_ui.mjs
+node tests/pairing_ui.mjs
 ```
 
 ## External task imports
