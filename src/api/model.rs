@@ -258,6 +258,7 @@ pub struct BoardColumns {
     pub in_review: Vec<BoardCard>,
     pub blocker: Vec<BoardCard>,
     pub done: Vec<BoardCard>,
+    pub dropped: Vec<BoardCard>,
 }
 
 impl BoardColumns {
@@ -269,6 +270,7 @@ impl BoardColumns {
             "in_review" => self.in_review.push(card),
             "blocker" => self.blocker.push(card),
             "done" => self.done.push(card),
+            "dropped" => self.dropped.push(card),
             _ => {}
         }
     }

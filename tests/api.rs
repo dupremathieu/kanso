@@ -3421,7 +3421,7 @@ async fn agent_move_scope_is_limited_to_working_columns() {
     assert_eq!(restored.status, StatusCode::OK);
     assert_eq!(restored.body["status"], "in_review");
 
-    for status in ["backlog", "done"] {
+    for status in ["backlog", "done", "dropped"] {
         let denied = move_to(status).await;
         assert_eq!(denied.status, StatusCode::FORBIDDEN, "{status}");
         assert_eq!(denied.code(), "forbidden");
@@ -4038,6 +4038,7 @@ async fn board_grouping_ordering_isolation_and_global_view() {
         "in_review",
         "blocker",
         "done",
+        "dropped",
     ] {
         assert!(board.body["columns"][column].is_array(), "{column}");
     }
@@ -4119,6 +4120,113 @@ async fn board_grouping_ordering_isolation_and_global_view() {
         .await;
     assert_eq!(archived_board.status, StatusCode::OK);
     let _ = (first, second);
+}
+
+#[tokio::test]
+async fn dropped_tasks_are_reopenable_project_only_and_do_not_satisfy_dependencies() {
+    let app = TestApp::new();
+    let cookie = app.login().await;
+    app.create_project(&cookie, "ALP").await;
+    let agent = app.create_token(&cookie, "drop-agent", "agent").await;
+    let token = agent["token"].as_str().unwrap();
+    app.create_task(
+        &cookie,
+        json!({"project_key":"ALP", "title":"Dependency", "status":"done"}),
+    )
+    .await;
+    app.create_task(
+        &cookie,
+        json!({"project_key":"ALP", "title":"Dependent", "status":"todo"}),
+    )
+    .await;
+    let link = app
+        .cookie_post(
+            "/api/tasks/ALP-2/dependencies",
+            Some(json!({"blocked_by":["ALP-1"]})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(link.status, StatusCode::OK);
+    let dropped = app
+        .cookie_post(
+            "/api/tasks/ALP-1/move",
+            Some(json!({"status":"dropped"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(dropped.status, StatusCode::OK, "{:?}", dropped.body);
+    assert_eq!(dropped.body["status"], "dropped");
+    assert!(dropped.body["done_at"].is_null());
+    let project = app
+        .get("/api/projects/ALP/board", Some(&cookie), None)
+        .await;
+    assert_eq!(project.body["columns"]["dropped"][0]["reference"], "ALP-1");
+    assert_eq!(project.body["columns"]["todo"][0]["blocked"], true);
+    let global = app.get("/api/board", Some(&cookie), None).await;
+    assert_eq!(global.body["projects"][0]["columns"]["dropped"], json!([]));
+    let filtered = app.get("/api/board?project=ALP", Some(&cookie), None).await;
+    assert_eq!(
+        filtered.body["projects"][0]["columns"]["dropped"][0]["reference"],
+        "ALP-1"
+    );
+    let denied = app
+        .request(
+            Method::POST,
+            "/api/tasks/ALP-1/move",
+            Some(json!({"status":"todo"})),
+            None,
+            Some(token),
+            None,
+        )
+        .await;
+    assert_eq!(denied.status, StatusCode::FORBIDDEN);
+    let reopened = app
+        .cookie_post(
+            "/api/tasks/ALP-1/move",
+            Some(json!({"status":"todo"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(reopened.status, StatusCode::OK);
+    assert_eq!(reopened.body["status"], "todo");
+    let rejected = app
+        .cookie_post(
+            "/api/tasks",
+            Some(json!({"project_key":"ALP", "title":"Invalid", "status":"dropped"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(
+        rejected.status,
+        StatusCode::BAD_REQUEST,
+        "{:?}",
+        rejected.body
+    );
+    let proposal = app
+        .request(
+            Method::POST,
+            "/api/tasks",
+            Some(json!({"project_key":"ALP", "title":"Proposal"})),
+            None,
+            Some(token),
+            None,
+        )
+        .await;
+    assert_eq!(proposal.status, StatusCode::CREATED);
+    let reference = proposal.body["reference"].as_str().unwrap();
+    let rejected = app
+        .cookie_post(
+            &format!("/api/inbox/{reference}/accept"),
+            Some(json!({"status":"dropped"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(
+        rejected.status,
+        StatusCode::BAD_REQUEST,
+        "{:?}",
+        rejected.body
+    );
 }
 
 #[tokio::test]

@@ -6,7 +6,7 @@
 import { t } from "./i18n/index.js?v={{VERSION}}";
 import { el, icon, isOverdue, formatDue } from "./dom.js?v={{VERSION}}";
 
-export const STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocker", "done"];
+export const STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocker", "done", "dropped"];
 const ACTIVE_STATUSES = ["in_progress", "in_review", "blocker"];
 
 const DRAG_THRESHOLD = 5;
@@ -265,7 +265,7 @@ function renderColumn(project, status, cards, options, mode) {
   }
 
   const footer =
-    mode === "project" || cards.length
+    status !== "dropped" && (mode === "project" || cards.length)
       ? el("div", { class: "column-footer" }, [quickAdd(project, status, options.onQuickAdd)])
       : null;
 
@@ -337,6 +337,7 @@ export function createBoardView(root, handlers) {
       const columnNodes = el("div", { class: "columns" });
 
       for (const status of STATUSES) {
+        if (mode === "global" && status === "dropped") continue;
         if (mode === "global" && !current.options.showAll && !ACTIVE_STATUSES.includes(status)) {
           continue;
         }
@@ -349,7 +350,7 @@ export function createBoardView(root, handlers) {
       if (mode === "global") {
         const total = STATUSES.reduce(
           (sum, status) =>
-            (columns[status] || []).filter((card) => matchesSearch(card, current.options.search)).length + sum,
+            (status === "dropped" ? 0 : (columns[status] || []).filter((card) => matchesSearch(card, current.options.search)).length) + sum,
           0
         );
         scroll.append(

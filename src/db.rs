@@ -17,6 +17,7 @@ pub const MIGRATIONS: &[&str] = &[
     include_str!("migrations/v4.sql"),
     include_str!("migrations/v5.sql"),
     include_str!("migrations/v6.sql"),
+    include_str!("migrations/v7.sql"),
 ];
 
 /// Open the database and apply the connection-level pragmas.
@@ -199,24 +200,48 @@ fn apply(connection: &mut Connection, migrations: &[&str]) -> Result<u32> {
             continue;
         }
 
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        // Another process may have applied this migration while we waited.
-        let applied: u32 =
-            transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if applied > latest {
-            return Err(Error::msg(format!(
+        // Rebuilding tasks requires disabling foreign keys outside the transaction;
+        // check integrity before committing and always restore enforcement.
+        let rebuild_tasks = version == 7;
+        if rebuild_tasks {
+            connection.pragma_update(None, "foreign_keys", false)?;
+        }
+        let result = (|| -> Result<()> {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            // Another process may have applied this migration while we waited.
+            let applied: u32 =
+                transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
+            if applied > latest {
+                return Err(Error::msg(format!(
                 "database schema version {applied} is newer than this binary supports ({latest})"
             )));
-        }
-        if applied >= version {
-            transaction.commit()?;
-            continue;
-        }
+            }
+            if applied >= version {
+                transaction.commit()?;
+                return Ok(());
+            }
 
-        transaction.execute_batch(sql)?;
-        transaction.pragma_update(None, "user_version", version)?;
-        transaction.commit()?;
-        tracing::info!(version, "applied database migration");
+            transaction.execute_batch(sql)?;
+            if rebuild_tasks {
+                let violations: i64 = transaction.query_row(
+                    "SELECT count(*) FROM pragma_foreign_key_check",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if violations != 0 {
+                    return Err(Error::msg("foreign key violations after tasks migration"));
+                }
+            }
+            transaction.pragma_update(None, "user_version", version)?;
+            transaction.commit()?;
+            tracing::info!(version, "applied database migration");
+            Ok(())
+        })();
+        if rebuild_tasks {
+            connection.pragma_update(None, "foreign_keys", true)?;
+        }
+        result?;
     }
 
     Ok(latest)
@@ -266,7 +291,7 @@ mod tests {
         let version: u32 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("read user_version");
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
 
         let mut statement = connection
             .prepare(
@@ -330,13 +355,54 @@ mod tests {
         let path = dir.path().join("kanso.db");
         let mut connection = open(&path).expect("open database");
 
-        assert_eq!(migrate(&mut connection).expect("first migration"), 6);
-        assert_eq!(migrate(&mut connection).expect("second migration"), 6);
+        assert_eq!(migrate(&mut connection).expect("first migration"), 7);
+        assert_eq!(migrate(&mut connection).expect("second migration"), 7);
 
         let version: u32 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("read user_version");
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
+    }
+
+    #[test]
+    fn upgrade_v6_preserves_references_and_secret_invalidation() {
+        let dir = TempDir::new();
+        let mut connection = open(&dir.path().join("kanso.db")).unwrap();
+        apply(&mut connection, &MIGRATIONS[..6]).unwrap();
+        connection.execute_batch("\
+            INSERT INTO projects (id,key,name,position,created_at,updated_at) VALUES ('p','ABC','Project',1,1,1);\
+            INSERT INTO tasks (id,project_id,number,title,status,rank,session_id,created_at,updated_at) VALUES ('t','p',1,'Task','blocker',1,'ses',1,1);\
+            INSERT INTO comments (id,task_id,author,body,created_at) VALUES ('c','t','ui','keep',1);\
+            INSERT INTO tokens (id,name,scope,hash,created_at) VALUES ('tok','agent','agent','hash',1);\
+            INSERT INTO secret_requests (id,task_id,token_id,session_id,label,purpose,state,created_at,deadline) VALUES ('s','t','tok','ses','label','purpose','waiting',1,9999999999999);\
+        ").unwrap();
+        migrate(&mut connection).unwrap();
+        let enabled: bool = connection
+            .pragma_query_value(None, "foreign_keys", |r| r.get(0))
+            .unwrap();
+        assert!(enabled);
+        connection
+            .execute("UPDATE tasks SET status='dropped' WHERE id='t'", [])
+            .unwrap();
+        let state: String = connection
+            .query_row("SELECT state FROM secret_requests WHERE id='s'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(state, "invalidated");
+        let body: String = connection
+            .query_row("SELECT body FROM comments WHERE task_id='t'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(body, "keep");
+        connection
+            .execute("DELETE FROM tasks WHERE id='t'", [])
+            .unwrap();
+        let count: i64 = connection
+            .query_row("SELECT count(*) FROM comments", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[test]
@@ -361,7 +427,7 @@ mod tests {
             )
             .expect("seed v1 rows");
 
-        assert_eq!(migrate(&mut connection).expect("migrate to v6"), 6);
+        assert_eq!(migrate(&mut connection).expect("migrate to latest"), 7);
 
         let mut statement = connection
             .prepare("PRAGMA index_info('checklist_task')")
@@ -415,7 +481,7 @@ mod tests {
             )
             .expect("seed v2 rows");
 
-        assert_eq!(migrate(&mut connection).expect("migrate to v6"), 6);
+        assert_eq!(migrate(&mut connection).expect("migrate to latest"), 7);
 
         let mut statement = connection
             .prepare("PRAGMA table_info('comments')")
@@ -451,7 +517,7 @@ mod tests {
         let mut connection = open(&dir.path().join("kanso.db")).unwrap();
         apply(&mut connection, &MIGRATIONS[..4]).unwrap();
         connection.execute_batch("INSERT INTO projects (id,key,name,position,created_at,updated_at) VALUES ('p','ABC','Existing',1,1,1); INSERT INTO tasks (id,project_id,number,title,status,rank,created_at,updated_at) VALUES ('t','p',1,'Existing','todo',1,1,1), ('u','p',2,'Second','todo',2,1,1);").unwrap();
-        assert_eq!(migrate(&mut connection).unwrap(), 6);
+        assert_eq!(migrate(&mut connection).unwrap(), 7);
         assert_eq!(
             connection
                 .query_row("SELECT title FROM tasks WHERE id='t'", [], |r| r

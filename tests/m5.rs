@@ -2016,7 +2016,7 @@ async fn dispatch_does_not_overwrite_a_manual_session_link_made_during_the_call(
 }
 
 #[tokio::test]
-async fn dispatch_from_blocker_or_done_clears_the_old_column_metadata() {
+async fn dispatch_from_blocker_done_or_dropped_clears_the_old_column_metadata() {
     let (url, _mock) = start_mock().await;
     let app = TestApp::new(Some(&url)).await;
     let cookie = app.login().await;
@@ -2060,6 +2060,25 @@ async fn dispatch_from_blocker_or_done_clears_the_old_column_metadata() {
     assert_eq!(moved.status, StatusCode::OK, "{:?}", moved.body);
     let response = app
         .post(&format!("/api/tasks/{done_ref}/dispatch"), None, &cookie)
+        .await;
+    assert_eq!(response.status, StatusCode::OK, "{:?}", response.body);
+    assert_eq!(response.body["status"], "in_progress");
+    assert!(response.body["done_at"].is_null());
+
+    let dropped = app
+        .create_card(&cookie, project["id"].as_str().expect("id"), "Dropped")
+        .await;
+    let dropped_ref = dropped["reference"].as_str().expect("ref");
+    let moved = app
+        .post(
+            &format!("/api/tasks/{dropped_ref}/move"),
+            Some(json!({ "status": "dropped" })),
+            &cookie,
+        )
+        .await;
+    assert_eq!(moved.status, StatusCode::OK, "{:?}", moved.body);
+    let response = app
+        .post(&format!("/api/tasks/{dropped_ref}/dispatch"), None, &cookie)
         .await;
     assert_eq!(response.status, StatusCode::OK, "{:?}", response.body);
     assert_eq!(response.body["status"], "in_progress");

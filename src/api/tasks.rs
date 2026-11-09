@@ -18,13 +18,14 @@ use crate::ids;
 use crate::rank;
 use crate::server::AppState;
 
-pub const STATUSES: [&str; 6] = [
+pub const STATUSES: [&str; 7] = [
     "backlog",
     "todo",
     "in_progress",
     "in_review",
     "blocker",
     "done",
+    "dropped",
 ];
 pub const STATES: [&str; 3] = ["active", "proposed", "archived"];
 pub const PRIORITIES: [&str; 3] = ["low", "normal", "high"];
@@ -651,7 +652,7 @@ pub async fn list(
         " ORDER BY CASE t.status
             WHEN 'backlog' THEN 0 WHEN 'todo' THEN 1 WHEN 'in_progress' THEN 2
             WHEN 'in_review' THEN 3 WHEN 'blocker' THEN 4 WHEN 'done' THEN 5
-            ELSE 6 END, t.rank, t.number LIMIT ? OFFSET ?",
+            WHEN 'dropped' THEN 6 ELSE 7 END, t.rank, t.number LIMIT ? OFFSET ?",
     );
     values.push(Value::Integer(i64::from(limit)));
     values.push(Value::Integer(i64::from(offset)));
@@ -703,6 +704,9 @@ pub async fn create(
             None => "backlog".to_owned(),
         }
     };
+    if status == "dropped" {
+        return Err(ApiError::validation("tasks cannot be created in dropped"));
+    }
     let priority = match payload.priority.as_deref() {
         Some(priority) => validate_priority(priority)?,
         None => "normal".to_owned(),
