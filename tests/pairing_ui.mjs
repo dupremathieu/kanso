@@ -1,0 +1,52 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8");
+const parser = source.slice(source.indexOf("function pairingLinkExpiry("), source.indexOf("\nfunction downloadBlob("));
+const pairingLinkExpiry = new Function(`${parser}; return pairingLinkExpiry;`)();
+const link = (payload) => `openchamber://connect?v=2&p=${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
+const valid = { pairingId: "id", secret: "secret" };
+assert.equal(pairingLinkExpiry(link(valid)), null);
+assert.ok(pairingLinkExpiry(link({ ...valid, expiresAt: "2100-01-01T00:00:00Z" })).getTime() > Date.now());
+assert.equal(pairingLinkExpiry(link({ ...valid, expiresAt: "2020-01-01T00:00:00Z" })).toISOString(), "2020-01-01T00:00:00.000Z");
+for (const bad of [link(valid).replace("openchamber:", "https:"), link(valid).replace("connect", "other"), link(valid).replace("connect", "user@connect"), link(valid).replace("v=2", "v=1"), `${link(valid)}&v=2`, `${link(valid)}&p=e30`, "openchamber://connect?v=2&p=***", link({ ...valid, pairingId: "" }), link({ ...valid, secret: "" }), link({ ...valid, expiresAt: "bad" })]) {
+  assert.throws(() => pairingLinkExpiry(bad));
+}
+
+const handler = source.slice(source.indexOf('    regenerate.addEventListener("click", async () => {'), source.indexOf("\n    page.append(form);"));
+let click;
+const regenerate = { disabled: false, addEventListener: (_, fn) => { click = fn; } };
+const pairingInput = { value: "" };
+const result = { textContent: "" };
+const calls = [];
+const api = { regenerateOpenChamber: async (value) => { calls.push(value); } };
+const t = (key, vars) => `${key}${vars ? ` ${vars.time}` : ""}`;
+new Function("regenerate", "pairingInput", "result", "api", "t", "pairingLinkExpiry", handler)(regenerate, pairingInput, result, api, t, pairingLinkExpiry);
+assert.ok(!source.includes("pairingInput.hidden = true"));
+await click();
+assert.equal(calls.length, 0);
+assert.equal(regenerate.disabled, false);
+assert.equal(result.textContent, "settings.integrationPairingRequired");
+pairingInput.value = "bad"; await click();
+assert.equal(result.textContent, "settings.integrationPairingMalformed");
+pairingInput.value = link({ ...valid, expiresAt: "2020-01-01T00:00:00Z" }); await click();
+assert.ok(result.textContent.startsWith("settings.integrationPairingExpired "));
+assert.equal(calls.length, 0);
+pairingInput.value = link(valid); await click();
+assert.equal(calls.length, 1);
+assert.equal(pairingInput.value, "");
+const keyHandler = source.slice(source.indexOf('    pairingInput.addEventListener("keydown"'), source.indexOf('    urlInput.addEventListener("input"'));
+let keydown;
+pairingInput.addEventListener = (event, fn) => { assert.equal(event, "keydown"); keydown = fn; };
+let clicks = 0;
+regenerate.click = () => { clicks++; };
+new Function("pairingInput", "regenerate", keyHandler)(pairingInput, regenerate);
+let prevented = false;
+keydown({ key: "Enter", preventDefault: () => { prevented = true; } });
+assert.ok(prevented);
+assert.equal(clicks, 1);
+regenerate.disabled = true; prevented = false;
+keydown({ key: "Enter", preventDefault: () => { prevented = true; } });
+assert.ok(prevented);
+assert.equal(clicks, 1);
+console.log("pairing UI workflow passed");
