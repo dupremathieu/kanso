@@ -3179,16 +3179,69 @@ async fn claim_release_conflicts_and_agent_scope() {
         .filter(|response| response.status == StatusCode::CONFLICT)
         .all(|response| response.code() == "already_claimed"));
 
-    app.create_task(
-        &cookie,
-        json!({"project_key": "ALP", "title": "Human claim", "status": "todo"}),
-    )
-    .await;
+    let human_task = app
+        .create_task(
+            &cookie,
+            json!({"project_key": "ALP", "title": "Human claim", "status": "todo"}),
+        )
+        .await;
     let human_claim = app
         .cookie_post("/api/tasks/ALP-6/claim", None, &cookie)
         .await;
     assert_eq!(human_claim.status, StatusCode::OK);
     assert_eq!(human_claim.body["claimed_by"], "ui");
+    assert_eq!(human_claim.body["status"], "todo");
+    assert_eq!(human_claim.body["rank"], human_task["rank"]);
+}
+
+#[tokio::test]
+async fn human_token_claims_keep_column_and_rank_in_both_endpoints() {
+    let app = TestApp::new();
+    let cookie = app.login().await;
+    app.create_project(&cookie, "ALP").await;
+    let token = app.create_token(&cookie, "human", "human").await;
+    let token = token["token"].as_str().expect("token");
+    let first = app
+        .create_task(
+            &cookie,
+            json!({"project_key": "ALP", "title": "First", "status": "backlog"}),
+        )
+        .await;
+    let claim = app
+        .request(
+            Method::POST,
+            "/api/tasks/ALP-1/claim",
+            None,
+            None,
+            Some(token),
+            None,
+        )
+        .await;
+    assert_eq!(claim.status, StatusCode::OK);
+    assert_eq!(claim.body["claimed_by"], "human");
+    assert_eq!(claim.body["status"], "backlog");
+    assert_eq!(claim.body["rank"], first["rank"]);
+
+    let second = app
+        .create_task(
+            &cookie,
+            json!({"project_key": "ALP", "title": "Second", "status": "todo"}),
+        )
+        .await;
+    let next = app
+        .request(
+            Method::GET,
+            "/api/agent/next?claim=1&project=ALP",
+            None,
+            None,
+            Some(token),
+            None,
+        )
+        .await;
+    assert_eq!(next.status, StatusCode::OK, "{:?}", next.body);
+    assert_eq!(next.body["claimed_by"], "human");
+    assert_eq!(next.body["status"], "todo");
+    assert_eq!(next.body["rank"], second["rank"]);
 }
 
 #[tokio::test]

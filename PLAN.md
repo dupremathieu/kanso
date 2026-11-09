@@ -265,7 +265,7 @@ JSON only; timestamps are Unix milliseconds (integers). Errors use
 | `GET` | `/api/tasks/:ref` | `:ref` = `ALP-42` or UUID; includes labels, checklist, comments, activity, dependencies |
 | `PATCH` | `/api/tasks/:ref` | editable fields |
 | `POST` | `/api/tasks/:ref/move` | `{status, before?, after?, restore?}` |
-| `POST` | `/api/tasks/:ref/claim` | agent or human; sets `claimed_by`, status → `in_progress` |
+| `POST` | `/api/tasks/:ref/claim` | agent or human; sets `claimed_by`; agent claims move status → `in_progress`, human claims retain their column |
 | `POST` | `/api/tasks/:ref/release` | clears the claim, keeps the column |
 | `POST` | `/api/tasks/:ref/comment` | `{body}` |
 | `POST` | `/api/tasks/:ref/checklist` | `{text}` |

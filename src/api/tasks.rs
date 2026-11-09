@@ -511,7 +511,7 @@ pub(super) enum ClaimOutcome {
 }
 
 /// Claim `task` in the caller's transaction: gate on state/status/dependencies,
-/// move it to the end of `in_progress`, and record the activity row.
+/// move agent claims to the end of `in_progress`, and record the activity row.
 ///
 /// `claimed_by` is the token principal (ownership); `actor` is only the
 /// attribution written to the activity log, so `X-Kanso-Agent` cannot take over
@@ -521,6 +521,7 @@ pub(super) fn claim_in_transaction(
     task: &Task,
     claimed_by: &str,
     actor: &str,
+    human: bool,
     now: i64,
 ) -> crate::error::Result<ClaimOutcome> {
     if task.claimed_by.is_some() {
@@ -541,16 +542,20 @@ pub(super) fn claim_in_transaction(
         return Ok(ClaimOutcome::DependencyUnmet);
     }
 
-    let max_rank: Option<f64> = connection.query_row(
-        "SELECT MAX(rank) FROM tasks WHERE project_id = ?1 AND status = 'in_progress'",
-        [&task.project_id],
-        |row| row.get(0),
-    )?;
-    let rank = rank::append(max_rank);
+    let (status, rank) = if human {
+        (task.status.as_str(), task.rank)
+    } else {
+        let max_rank: Option<f64> = connection.query_row(
+            "SELECT MAX(rank) FROM tasks WHERE project_id = ?1 AND status = 'in_progress'",
+            [&task.project_id],
+            |row| row.get(0),
+        )?;
+        ("in_progress", rank::append(max_rank))
+    };
     let changed = connection.execute(
-        "UPDATE tasks SET claimed_by = ?1, status = 'in_progress', rank = ?2, updated_at = ?3
-         WHERE id = ?4 AND claimed_by IS NULL",
-        params![claimed_by, rank, now, task.id],
+        "UPDATE tasks SET claimed_by = ?1, status = ?2, rank = ?3, updated_at = ?4
+         WHERE id = ?5 AND claimed_by IS NULL",
+        params![claimed_by, status, rank, now, task.id],
     )?;
     if changed == 0 {
         return Ok(ClaimOutcome::AlreadyClaimed);
@@ -561,7 +566,7 @@ pub(super) fn claim_in_transaction(
         &task.id,
         actor,
         "claimed",
-        &json!({ "from": task.status, "to": "in_progress" }),
+        &json!({ "from": task.status, "to": status }),
     )?;
     Ok(ClaimOutcome::Claimed)
 }
@@ -1314,6 +1319,7 @@ pub async fn claim(
 ) -> Result<Json<TaskDetail>, ApiError> {
     let actor = auth.0.actor().to_owned();
     let claimed_by = auth.0.name.clone();
+    let human = auth.0.is_human();
     let now = now_millis();
     let outcome = state
         .db
@@ -1322,7 +1328,7 @@ pub async fn claim(
             let Some(task) = task_by_ref(&transaction, &reference)? else {
                 return Ok(ClaimResult::NotFound);
             };
-            match claim_in_transaction(&transaction, &task, &claimed_by, &actor, now)? {
+            match claim_in_transaction(&transaction, &task, &claimed_by, &actor, human, now)? {
                 ClaimOutcome::Claimed => {
                     let task = task_by_ref(&transaction, &task.id)?
                         .ok_or_else(|| crate::error::Error::msg("claimed task missing"))?;
