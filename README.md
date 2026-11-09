@@ -279,7 +279,7 @@ and `internal` (500), plus the specific conflict codes `already_claimed`,
 `not_claimable`, `dependency_unmet`, `not_claimed`, `not_active`,
 `not_proposed`, `already_dispatched`, `not_blocked`, `no_session`,
 `not_a_reply` and `already_sent`. The optional OpenChamber adapter adds
-`integration_disabled`/`integration_unreachable` (503) and
+`integration_disabled`/`integration_unreachable`/`pairing_failed` (503) and
 `openchamber_error` (502). `GET /api/health` and `POST /api/auth/login` are
 public; other `/api` routes need a session cookie or `Authorization: Bearer
 kanso_...`, except GitHub connection management, which requires a human browser

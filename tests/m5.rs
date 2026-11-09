@@ -56,6 +56,7 @@ struct Mock {
     send_body: Arc<Mutex<Value>>,
     list_queue: Arc<Mutex<VecDeque<(u16, Value)>>>,
     pairing_token: Arc<Mutex<String>>,
+    pairing_status: Arc<AtomicU16>,
 }
 
 impl Mock {
@@ -74,6 +75,7 @@ impl Mock {
             send_body: Arc::new(Mutex::new(json!({ "promptDispatched": true }))),
             list_queue: Arc::new(Mutex::new(VecDeque::new())),
             pairing_token: Arc::new(Mutex::new("oc_client_paired".into())),
+            pairing_status: Arc::new(AtomicU16::new(200)),
         }
     }
 
@@ -263,7 +265,7 @@ async fn mock_pairing(
 ) -> Response {
     mock.record("POST", "/api/client-auth/pairing/redeem", &headers, payload);
     response(
-        200,
+        mock.pairing_status.load(Ordering::SeqCst),
         json!({"clientToken": *mock.pairing_token.lock().unwrap_or_else(|error| error.into_inner())}),
     )
 }
@@ -1523,6 +1525,32 @@ async fn changing_url_requires_a_new_token_and_does_not_redirect_the_old_one() {
     assert_eq!(changed.status, StatusCode::BAD_REQUEST);
     assert_eq!(app.state.openchamber().unwrap().url(), url);
     assert!(other.requests().is_empty());
+}
+
+#[tokio::test]
+async fn pairing_upstream_failures_return_actionable_errors() {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let (url, mock) = start_mock().await;
+    let app = TestApp::new(Some(&url)).await;
+    let cookie = app.login().await;
+    let encoded = URL_SAFE_NO_PAD.encode(json!({"pairingId":"id","secret":"secret"}).to_string());
+    for (status, expected, message) in [
+        (400, StatusCode::BAD_GATEWAY, "rejected pairing"),
+        (404, StatusCode::BAD_GATEWAY, "rejected pairing"),
+        (429, StatusCode::SERVICE_UNAVAILABLE, "rate limiting"),
+        (500, StatusCode::SERVICE_UNAVAILABLE, "could not redeem"),
+    ] {
+        mock.pairing_status.store(status, Ordering::SeqCst);
+        let result = app
+            .post(
+                "/api/integration/openchamber/regenerate",
+                Some(json!({"link":format!("openchamber://connect?v=2&p={encoded}")})),
+                &cookie,
+            )
+            .await;
+        assert_eq!(result.status, expected);
+        assert!(result.body.to_string().contains(message));
+    }
 }
 
 #[tokio::test]
