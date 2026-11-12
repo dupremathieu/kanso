@@ -101,6 +101,10 @@ async function download(path) {
 const enc = encodeURIComponent;
 
 export const api = {
+  models: () => request("/api/models"),
+  createModel: (body) => request("/api/models", { method: "POST", body }),
+  updateModel: (id, body) => request(`/api/models/${enc(id)}`, { method: "PUT", body }),
+  deleteModel: (id) => request(`/api/models/${enc(id)}`, { method: "DELETE" }),
   me: () => request("/api/me", { allowUnauthorized: true }),
 
   async login(password) {

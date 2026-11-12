@@ -41,6 +41,7 @@ struct Export {
     tasks: Vec<ExportTask>,
     comments: Vec<ExportComment>,
     task_reference_aliases: Vec<ReferenceAlias>,
+    model_presets: Vec<super::models::Preset>,
 }
 
 #[derive(Debug, Serialize)]
@@ -146,6 +147,7 @@ fn load_export(connection: &mut rusqlite::Connection) -> crate::error::Result<Ex
         tasks: export_tasks,
         comments,
         task_reference_aliases,
+        model_presets: super::models::load(connection)?,
     })
 }
 

@@ -26,6 +26,17 @@ running, testing and configuring the project.
 - Keyboard shortcuts, including `n`, `/`, `j`/`k`, `m`, `Esc` and `?`; the
   question-mark button in the top bar opens the same help dialog.
 
+### Model presets
+
+Model presets are managed by humans in **Settings → Models** and are initially
+empty. Each unique title maps to a `provider/model[#variant]` value. Project and
+dispatch forms can copy a preset into their existing free-text model field;
+subsequent edits or deletion of the preset do not change earlier selections.
+The title `default` has no special meaning. Agents can read the catalog with
+`kanso models list [--json]`, but cannot modify it. SQLite backups include the
+catalog and JSON exports include `model_presets`; external task imports do not
+restore global settings. Restore a SQLite backup to recover the complete catalog.
+
 ## Screenshots
 
 Captured from the M7 build; the PNG files are committed after review.
@@ -131,6 +142,7 @@ override the file per value; `KANSO_CONFIG` overrides its path.
 
 ```sh
 kanso project list | add --key ALP --name Alpha | show ALP | edit ALP --name …
+kanso models list [--json]
 kanso task list [--project ALP] [--status todo] [--label bug] [--mine]
 kanso task show ALP-42
 kanso task move-project ALP-42 --project OTHER
@@ -490,7 +502,7 @@ checklist creation/update events carry `task_id` plus `item` (updates also carry
 the full reordered `checklist`), and `checklist.deleted` carries `task_id` and
 `item_id`. Token and session events are deliberately not broadcast.
 
-### Labels, checklist, comments and tokens
+### Models, labels, checklist, comments and tokens
 
 | Method | Path | Notes |
 | --- | --- | --- |
@@ -502,7 +514,10 @@ the full reordered `checklist`), and `checklist.deleted` carries `task_id` and
 | `DELETE` | `/api/tasks/:ref/checklist/:item` | Human only in M2 |
 | `GET`/`POST` | `/api/tokens` | `{name,scope}`; the `kanso_` token is returned once only; `ui` is reserved |
 | `DELETE` | `/api/tokens/:id` | Revoke; repeating it is idempotent |
-| `GET` | `/api/export.json` | Human only; versioned dump of projects, labels, all cards (with checklists and dependencies), comments and `task_reference_aliases`; downloadable attachment with `Cache-Control: no-store` |
+| `GET` | `/api/models` | List model presets; available to humans and agents |
+| `POST` | `/api/models` | Human only; create a preset with `title` and `model` |
+| `PUT`, `DELETE` | `/api/models/:id` | Human only; replace or delete a preset |
+| `GET` | `/api/export.json` | Human only; versioned dump including model presets, projects, labels, cards, comments and `task_reference_aliases`; downloadable attachment with `Cache-Control: no-store` |
 | `POST` | `/api/backup` | Human only; `VACUUM INTO` under `<data_dir>/backups/`; body `{dir?}` resolves under the data directory |
 
 Label names are unique case-insensitively and colors use `#rrggbb`. Labels are

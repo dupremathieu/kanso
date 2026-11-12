@@ -518,7 +518,7 @@ function renderChrome() {
   dom.tabInbox.classList.toggle("active", route.name === "inbox");
   dom.settings.classList.toggle(
     "active",
-    ["settings-projects", "settings-tokens", "settings-integration", "settings-export"].includes(
+    ["settings-projects", "settings-models", "settings-tokens", "settings-integration", "settings-export"].includes(
       route.name
     )
   );
@@ -588,6 +588,7 @@ function parseRoute(pathname) {
   if (path === "/inbox") return { name: "inbox" };
   if (path === "/imports") return { name: "imports" };
   if (path === "/settings/projects") return { name: "settings-projects" };
+  if (path === "/settings/models") return { name: "settings-models" };
   if (path === "/settings/tokens") return { name: "settings-tokens" };
   if (path === "/settings/integration") return { name: "settings-integration" };
   if (path === "/settings/export") return { name: "settings-export" };
@@ -662,6 +663,10 @@ async function renderRoute() {
     case "settings-projects":
       showPageRegion();
       await renderSettingsProjects(token);
+      break;
+    case "settings-models":
+      showPageRegion();
+      await renderSettingsModels(token);
       break;
     case "settings-tokens":
       showPageRegion();
@@ -1032,6 +1037,8 @@ function renderInboxPage() {
 
 function settingsHeader(active) {
   const version = document.querySelector('meta[name="kanso-version"]')?.content;
+  const models = el("a", { class: `settings-tab${active === "models" ? " active" : ""}`, href: "/settings/models" }, [icon("gear", { size: 15 }), el("span", { text: t("models.title") })]);
+  models.addEventListener("click", (event) => { event.preventDefault(); navigate("/settings/models"); });
   const projects = el(
     "a",
     { class: `settings-tab${active === "projects" ? " active" : ""}`, href: "/settings/projects" },
@@ -1078,9 +1085,55 @@ function settingsHeader(active) {
     el("div", {}, [
       el("h1", { class: "page-title", text: t("settings.title") }),
       version ? el("p", { class: "settings-version", text: `Kanso v${version}` }) : null,
-      el("nav", { class: "settings-tabs" }, [projects, tokens, integration, exportTab])
+      el("nav", { class: "settings-tabs" }, [projects, models, tokens, integration, exportTab])
     ])
   ]);
+}
+
+async function renderSettingsModels(token) {
+  if (!state.dom || state.routeToken !== token) return;
+  state.dom.pageRegion.replaceChildren(el("div", { class: "page-loading" }, [
+    el("span", { class: "spinner", "aria-hidden": "true" }),
+    el("span", { class: "muted", text: t("common.loading") })
+  ]));
+  try {
+    const presets = await api.models();
+    if (state.routeToken !== token) return;
+    const human = state.me && state.me.scope === "human";
+    const page = el("div", { class: "page" }, [settingsHeader("models"), el("p", { class: "page-subtitle", text: t("models.description") })]);
+    function editor(preset = null) {
+      const title = el("input", { class: "input", required: true, maxlength: "120", value: preset?.title || "", placeholder: t("models.presetTitle"), "aria-label": t("models.presetTitle") });
+      const model = el("input", { class: "input", required: true, value: preset?.model || "", placeholder: t("form.exampleModel"), "aria-label": t("form.model") });
+      const error = el("p", { class: "field-hint", role: "alert" });
+      const save = el("button", { type: "submit", class: "button button-primary", text: t("form.save") });
+      const form = el("form", { class: "form-stack" }, [title, model, error, save]);
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault(); save.disabled = true;
+        try {
+          const body = { title: title.value, model: model.value };
+          if (preset) await api.updateModel(preset.id, body); else await api.createModel(body);
+          await renderSettingsModels(token);
+        } catch (failure) { error.textContent = failure.message; save.disabled = false; }
+      });
+      return form;
+    }
+    if (human) page.append(editor());
+    for (const preset of presets) {
+      const section = el("section", { class: "form-section" }, [el("h3", { class: "form-section-title", text: preset.title }), el("p", { text: preset.model })]);
+      if (human) {
+        const edit = el("button", { type: "button", class: "button button-secondary", text: t("models.edit") });
+        edit.addEventListener("click", () => section.replaceChildren(editor(preset)));
+        const remove = el("button", { type: "button", class: "button button-danger", text: t("common.delete") });
+        remove.addEventListener("click", async () => {
+          if (!await confirmDialog(t("models.confirmDelete"), { title: t("models.deleteTitle"), danger: true })) return;
+          try { await api.deleteModel(preset.id); await renderSettingsModels(token); } catch (failure) { toastForError(failure, t); }
+        });
+        section.append(edit, remove);
+      }
+      page.append(section);
+    }
+    state.dom.pageRegion.replaceChildren(page);
+  } catch (failure) { toastForError(failure, t); }
 }
 
 async function renderSettingsProjects(token) {
@@ -2227,6 +2280,7 @@ async function refreshAfterReconnect() {
     if (isBoardRoute()) await refreshBoard();
     if (state.route.name === "inbox") renderInboxPage();
     if (state.route.name === "settings-projects") await renderSettingsProjects(state.routeToken);
+    if (state.route.name === "settings-models") await renderSettingsModels(state.routeToken);
     if (state.route.name === "settings-tokens") await renderSettingsTokens(state.routeToken);
     if (state.route.name === "settings-integration") await renderSettingsIntegration(state.routeToken);
     if (state.route.name === "settings-export") await renderSettingsExport(state.routeToken);

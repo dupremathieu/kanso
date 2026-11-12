@@ -37,6 +37,7 @@ mod inbox;
 pub(crate) mod integration;
 mod labels;
 pub(crate) mod model;
+mod models;
 mod projects;
 mod reply;
 pub(crate) mod secret;
@@ -407,6 +408,11 @@ pub fn routes() -> Router<AppState> {
             post(integration::regenerate),
         )
         .route("/api/projects", get(projects::list).post(projects::create))
+        .route("/api/models", get(models::list).post(models::create))
+        .route(
+            "/api/models/{id}",
+            axum::routing::put(models::update).delete(models::delete),
+        )
         .route(
             "/api/projects/{id}",
             get(projects::get).patch(projects::update),

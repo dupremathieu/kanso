@@ -88,7 +88,7 @@ fn validate_name(raw: &str) -> Result<String, ApiError> {
 }
 
 /// Trim and validate a project model. An empty value stores `NULL`.
-fn validate_model(raw: &str) -> Result<Option<String>, ApiError> {
+pub(super) fn validate_model(raw: &str) -> Result<Option<String>, ApiError> {
     let model = raw.trim();
     if model.is_empty() {
         return Ok(None);
