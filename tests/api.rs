@@ -1926,6 +1926,15 @@ async fn agent_scope_matrix() {
         .await;
     assert_eq!(checklist.status, StatusCode::CREATED);
     let item_id = checklist.body["id"].as_str().expect("item id");
+    let comment = app
+        .cookie_post(
+            &format!("/api/tasks/{reference}/comment"),
+            Some(json!({"body": "keep"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(comment.status, StatusCode::CREATED);
+    let comment_id = comment.body["id"].as_str().expect("comment id");
 
     let created = app.create_token(&cookie, "agent", "agent").await;
     let agent = created["token"].as_str().expect("token");
@@ -2000,6 +2009,11 @@ async fn agent_scope_matrix() {
         (
             Method::DELETE,
             format!("/api/tasks/{reference}/checklist/{item_id}"),
+            None,
+        ),
+        (
+            Method::DELETE,
+            format!("/api/tasks/{reference}/comment/{comment_id}"),
             None,
         ),
     ];
@@ -3168,6 +3182,89 @@ async fn checklist_ordering_and_comment_attribution() {
 }
 
 #[tokio::test]
+async fn humans_can_remove_comments() {
+    let app = TestApp::new();
+    let cookie = app.login().await;
+    app.create_project(&cookie, "ALP").await;
+    let task = app
+        .create_task(&cookie, json!({"project_key": "ALP", "title": "Thread"}))
+        .await;
+    let reference = task["reference"].as_str().expect("reference").to_owned();
+    let other = app
+        .create_task(&cookie, json!({"project_key": "ALP", "title": "Other"}))
+        .await;
+    let other_reference = other["reference"].as_str().expect("reference");
+
+    let created = app
+        .cookie_post(
+            &format!("/api/tasks/{reference}/comment"),
+            Some(json!({"body": "remove me"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    let comment_id = created.body["id"].as_str().expect("id").to_owned();
+
+    // The comment must belong to the card named in the path.
+    let wrong_card = app
+        .cookie_delete(
+            &format!("/api/tasks/{other_reference}/comment/{comment_id}"),
+            &cookie,
+        )
+        .await;
+    assert_eq!(wrong_card.status, StatusCode::NOT_FOUND);
+    assert_eq!(wrong_card.code(), "not_found");
+
+    let detail = app
+        .get(&format!("/api/tasks/{reference}"), Some(&cookie), None)
+        .await;
+    assert_eq!(
+        detail.body["comments"].as_array().expect("comments").len(),
+        1
+    );
+
+    let task_id = task["id"].as_str().expect("id").to_owned();
+    let mut events = app.state.events.subscribe();
+    let removed = app
+        .cookie_delete(
+            &format!("/api/tasks/{reference}/comment/{comment_id}"),
+            &cookie,
+        )
+        .await;
+    assert_eq!(removed.status, StatusCode::NO_CONTENT);
+    let event = events.try_recv().expect("comment.deleted event");
+    assert_eq!(event.kind, "comment.deleted");
+    assert_eq!(event.data["task_id"], task_id.as_str());
+    assert_eq!(event.data["comment_id"], comment_id.as_str());
+    assert!(events.try_recv().is_err());
+
+    let detail = app
+        .get(&format!("/api/tasks/{reference}"), Some(&cookie), None)
+        .await;
+    assert!(detail.body["comments"]
+        .as_array()
+        .expect("comments")
+        .is_empty());
+    let activity = detail.body["activity"]
+        .as_array()
+        .expect("activity")
+        .iter()
+        .find(|entry| entry["kind"] == "comment_removed")
+        .expect("comment_removed activity");
+    assert_eq!(activity["actor"], "ui");
+    assert_eq!(activity["data"]["comment_id"], comment_id.as_str());
+    assert_eq!(activity["data"]["author"], "ui");
+
+    let again = app
+        .cookie_delete(
+            &format!("/api/tasks/{reference}/comment/{comment_id}"),
+            &cookie,
+        )
+        .await;
+    assert_eq!(again.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn every_task_mutation_writes_activity() {
     let app = TestApp::new();
     let cookie = app.login().await;
@@ -3205,9 +3302,16 @@ async fn every_task_mutation_writes_activity() {
     )
     .await;
 
-    app.cookie_post(
-        &format!("/api/tasks/{reference}/comment"),
-        Some(json!({"body": "hi"})),
+    let comment = app
+        .cookie_post(
+            &format!("/api/tasks/{reference}/comment"),
+            Some(json!({"body": "hi"})),
+            &cookie,
+        )
+        .await;
+    let comment_id = comment.body["id"].as_str().expect("id").to_owned();
+    app.cookie_delete(
+        &format!("/api/tasks/{reference}/comment/{comment_id}"),
         &cookie,
     )
     .await;
@@ -3245,6 +3349,7 @@ async fn every_task_mutation_writes_activity() {
         "updated",
         "label_removed",
         "commented",
+        "comment_removed",
         "checklist_added",
         "checklist_updated",
         "checklist_removed",

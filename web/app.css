@@ -1270,6 +1270,16 @@ body.resizing-panel * {
   font-weight: 700;
 }
 
+.comment-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.comment-meta .button-icon {
+  padding: 0 2px;
+}
+
 .comment-body {
   font-size: 0.88rem;
 }

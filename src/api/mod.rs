@@ -449,6 +449,10 @@ pub fn routes() -> Router<AppState> {
         .route("/api/board", get(board::global))
         .route("/api/projects/{id}/board", get(board::project_board))
         .route("/api/tasks/{reference}/comment", post(comments::create))
+        .route(
+            "/api/tasks/{reference}/comment/{comment_id}",
+            axum::routing::delete(comments::delete),
+        )
         .route("/api/tasks/{reference}/reply", post(reply::create))
         .route(
             "/api/tasks/{reference}/secrets",

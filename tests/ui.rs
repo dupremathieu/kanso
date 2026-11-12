@@ -89,6 +89,42 @@ fn task_title_editor_is_human_only_and_saves_the_title() {
 }
 
 #[test]
+fn comments_expose_a_human_only_remove_button() {
+    let panel = std::fs::read_to_string(repository_web_dir().join("panel.js")).unwrap();
+    let section = panel
+        .split("  renderComments(detail) {")
+        .nth(1)
+        .unwrap()
+        .split("  renderDependencies(detail) {")
+        .next()
+        .unwrap();
+    let remove = section
+        .split("if (this.isHuman()) {")
+        .nth(1)
+        .unwrap()
+        .split("list.append(")
+        .next()
+        .unwrap();
+    assert!(remove.contains("t(\"panel.removeComment\")"));
+    assert!(remove.contains("comment-${comment.id}-remove"));
+    assert!(remove.contains("if (this.busy) return;"));
+    assert!(remove.contains("api.removeComment(detail.reference, comment.id)"));
+    assert!(!remove.contains("disabled: this.busy"));
+
+    let api = std::fs::read_to_string(repository_web_dir().join("api.js")).unwrap();
+    assert!(api.contains("removeComment: (reference, commentId) =>"));
+    assert!(api.contains("/comment/${enc(commentId)}"));
+    assert!(api.contains("method: \"DELETE\""));
+
+    let app = std::fs::read_to_string(repository_web_dir().join("app.js")).unwrap();
+    assert!(app.contains("\"comment.deleted\""));
+
+    let i18n = std::fs::read_to_string(repository_web_dir().join("i18n/en.js")).unwrap();
+    assert!(i18n.contains("\"panel.removeComment\": \"Remove comment\""));
+    assert!(i18n.contains("\"activity.comment_removed\": \"removed a comment\""));
+}
+
+#[test]
 fn secret_input_is_separate_from_drafts_and_refreshes_on_secret_events() {
     let panel = std::fs::read_to_string(repository_web_dir().join("panel.js")).unwrap();
     let section = panel

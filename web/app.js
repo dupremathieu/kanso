@@ -53,6 +53,7 @@ const EVENT_TYPES = [
   "project.archived",
   "comment.created",
   "comment.updated",
+  "comment.deleted",
   "secret.updated",
   "checklist.created",
   "checklist.updated",

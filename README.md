@@ -492,8 +492,9 @@ Event types include `task.created`, `task.updated`, `task.moved`, `task.claimed`
 `task.released`, `task.archived`, `task.restored`, `task.deleted`,
 `dependencies.changed`, `proposal.created`, `proposal.accepted`,
 `proposal.rejected`, `project.created`, `project.updated`, `project.archived`,
-`comment.created`, `comment.updated`, `checklist.created`, `checklist.updated`,
-`checklist.deleted`, `label.created`, `label.updated` and `label.deleted`.
+`comment.created`, `comment.updated`, `comment.deleted`, `checklist.created`,
+`checklist.updated`, `checklist.deleted`, `label.created`, `label.updated` and
+`label.deleted`.
 Task events carry the card summary under `data.task`; `task.moved` also carries
 `from`, `to`, the activity kind (`moved`, `blocked` or `unblocked`) and the
 ordered target `column`; `task.archived`/`task.restored` also carry `column`;
@@ -509,6 +510,7 @@ the full reordered `checklist`), and `checklist.deleted` carries `task_id` and
 | `GET`/`POST` | `/api/labels` | Create with `{name,color,is_global?,project_ids?,prompt_template?}`; list all labels or use `?project=ID_OR_KEY` to filter by availability |
 | `PATCH`/`DELETE` | `/api/labels/:id` | `prompt_template: null` clears it and omitting it keeps it; deleting detaches the label from cards |
 | `POST` | `/api/tasks/:ref/comment` | `{body}`; author is `ui`, the token name, or `X-Kanso-Agent` for an agent token |
+| `DELETE` | `/api/tasks/:ref/comment/:comment_id` | Human only; removes the comment from the card |
 | `POST` | `/api/tasks/:ref/checklist` | `{text}` |
 | `PATCH` | `/api/tasks/:ref/checklist/:item` | `{text?,done?,before?,after?}`; `after` names the preceding item and `before` the following one |
 | `DELETE` | `/api/tasks/:ref/checklist/:item` | Human only in M2 |
@@ -548,12 +550,12 @@ Agent-scoped tokens may read projects, tasks, labels, boards, the inbox and
 reorder checklist items; and create proposals. They may not move a card to `backlog` or `done` (nor move one out of
 `backlog`), release another identity's claim, accept or reject proposals, create
 active cards, edit cards, change dependencies, archive, restore or delete cards,
-delete checklist items, or manage projects/labels/tokens.
+delete checklist items or comments, or manage projects/labels/tokens.
 
 Every task mutation writes an `activity` row (`created`, `proposed`, `updated`,
 `moved`, `blocked`, `unblocked`, `claimed`, `released`, `accepted`, `rejected`,
-`dependencies_changed`, `commented`, `reply_sent`, `reply_failed`,
-`reply_unknown`, `checklist_added`, `checklist_updated`,
+`dependencies_changed`, `commented`, `comment_removed`, `reply_sent`,
+`reply_failed`, `reply_unknown`, `checklist_added`, `checklist_updated`,
 `checklist_removed`, `label_added`, `label_removed`, `session_linked`,
 `dispatched`, `session_idle`, `session_failed`,
 `session_offline`, `session_running`, `permission_auto_accept_failed`,

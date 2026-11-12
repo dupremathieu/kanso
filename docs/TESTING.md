@@ -468,3 +468,32 @@ reload and that the description is unchanged, and captures desktop/mobile
 screenshots of the editor. The script uses disposable data under
 `~/.cache/tmp/opencode` and modifies no other board. Omit
 `KANSO_TITLE_SCREENSHOTS` to skip the captures.
+
+## 16. Comment removal (KANSO-42)
+
+The card panel shows a trash button in each comment header for humans. It calls
+`DELETE /api/tasks/:ref/comment/:comment_id`, which is human-only and returns
+`204`; an unknown comment, or one that belongs to another card, returns `404`.
+Removal writes a `comment_removed` activity entry (the comment id and author,
+not its body) and broadcasts `comment.deleted`, so another tab with the same
+panel open refreshes. Agent tokens may comment but not remove comments.
+`tests/ui.rs` checks the button, the API call, the event subscription and the
+strings; `tests/api.rs` covers the endpoint, attribution, the `comment.deleted`
+payload and the agent denial.
+
+An optional real-browser check drives the button against a disposable local
+Kanso instance:
+
+```sh
+cargo build --locked
+PLAYWRIGHT_MODULE=/path/to/tooling/node_modules/playwright/index.mjs \
+KANSO_COMMENT_SCREENSHOTS=docs/screenshots/kanso-42 \
+node scripts/test-comment-remove-ui.mjs
+```
+
+It checks that removal empties the thread, records the activity entry, keeps a
+remaining comment's button enabled, refreshes a second tab through SSE, leaves
+the composer usable for a new comment and survives a reload, and captures
+desktop/mobile screenshots. The script uses disposable data under
+`~/.cache/tmp/opencode` and modifies no other board. Omit
+`KANSO_COMMENT_SCREENSHOTS` to skip the captures.
