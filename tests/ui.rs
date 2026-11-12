@@ -125,6 +125,35 @@ fn comments_expose_a_human_only_remove_button() {
 }
 
 #[test]
+fn recall_controls_are_human_gated_and_use_distinct_retry() {
+    let panel = std::fs::read_to_string(repository_web_dir().join("panel.js")).unwrap();
+    assert!(panel.contains("comment.delivery_kind !== \"recall\""));
+    assert!(panel.contains("api.retryRecall(reference, comment.id)"));
+    assert!(panel.contains("api.recallTask(reference, body)"));
+    assert!(panel.contains("data.reconciled === false) return t(\"activity.recallChanged\")"));
+    let gating = panel
+        .split("  canRecall(detail) {")
+        .nth(1)
+        .unwrap()
+        .split("  renderRecall(detail)")
+        .next()
+        .unwrap();
+    for expected in [
+        "this.isHuman()",
+        "detail.state === \"active\"",
+        "\"in_progress\", \"in_review\"",
+        "detail.session_status === \"idle\"",
+        "this.integration.enabled",
+    ] {
+        assert!(gating.contains(expected), "{expected}");
+    }
+    let api = std::fs::read_to_string(repository_web_dir().join("api.js")).unwrap();
+    assert!(api.contains("/recall/${enc(commentId)}"));
+    let i18n = std::fs::read_to_string(repository_web_dir().join("i18n/en.js")).unwrap();
+    assert!(i18n.contains("\"toast.recallChanged\""));
+}
+
+#[test]
 fn secret_input_is_separate_from_drafts_and_refreshes_on_secret_events() {
     let panel = std::fs::read_to_string(repository_web_dir().join("panel.js")).unwrap();
     let section = panel

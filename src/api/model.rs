@@ -71,9 +71,11 @@ pub struct Comment {
     pub created_at: i64,
     pub delivery_status: Option<String>,
     pub delivery_error: Option<String>,
+    pub delivery_kind: Option<String>,
 }
 
-pub const COMMENT_COLUMNS: &str = "id, author, body, created_at, delivery_status, delivery_error";
+pub const COMMENT_COLUMNS: &str =
+    "id, author, body, created_at, delivery_status, delivery_error, delivery_kind";
 
 impl Comment {
     pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
@@ -84,6 +86,7 @@ impl Comment {
             created_at: row.get(3)?,
             delivery_status: row.get(4)?,
             delivery_error: row.get(5)?,
+            delivery_kind: row.get(6)?,
         })
     }
 }

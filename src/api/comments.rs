@@ -84,6 +84,7 @@ pub async fn create(
                     created_at: now,
                     delivery_status: None,
                     delivery_error: None,
+                    delivery_kind: None,
                 },
             )))
         })

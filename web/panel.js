@@ -31,7 +31,7 @@ function statusLabel(status) {
 }
 
 function latestReply(comments) {
-  const replies = (comments || []).filter((comment) => comment.delivery_status);
+  const replies = (comments || []).filter((comment) => comment.delivery_status && comment.delivery_kind !== "recall");
   return replies.length ? replies[replies.length - 1] : null;
 }
 
@@ -39,6 +39,11 @@ function replyToast(status) {
   if (status === "sent") return t("toast.replySent");
   if (status === "unknown") return t("toast.replyUnknown");
   return t("toast.replyFailed");
+}
+
+function recallToast(delivery) {
+  if (delivery?.status === "sent") return t(delivery.reconciled === false ? "toast.recallChanged" : "toast.recallSent");
+  return t(delivery?.status === "unknown" ? "toast.recallUnknown" : "toast.recallFailed");
 }
 
 function selectInput(options, value, attributes = {}) {
@@ -70,6 +75,7 @@ export class Panel {
     this.editingDescription = false;
     this.editingItem = null;
     this.sessionLinkOpen = false;
+    this.recallOpen = false;
     this.pendingReload = false;
     this.pendingReloadTimer = null;
     this.drafts = new Map();
@@ -169,6 +175,7 @@ export class Panel {
     this.editingDescription = false;
     this.editingItem = null;
     this.sessionLinkOpen = false;
+    this.recallOpen = false;
     this.clearDrafts();
     this.clearPendingReload();
     this.root.classList.add("open");
@@ -202,6 +209,7 @@ export class Panel {
     this.editingDescription = false;
     this.editingItem = null;
     this.sessionLinkOpen = false;
+    this.recallOpen = false;
     this.clearDrafts();
     this.clearPendingReload();
     this.root.classList.remove("open");
@@ -501,14 +509,14 @@ export class Panel {
     const reference = this.reference;
     this.busy = true;
     try {
-      const result = await api.retryReply(reference, comment.id);
+      const result = await (comment.delivery_kind === "recall" ? api.retryRecall(reference, comment.id) : api.retryReply(reference, comment.id));
       if (this.reference !== reference) return;
       const updated = await api.task(reference);
       if (this.reference !== reference) return;
       this.busy = false;
       const status = result.delivery ? result.delivery.status : null;
       this.applyDetail(updated);
-      toast(replyToast(status), status === "sent" ? "success" : "warning");
+      toast(comment.delivery_kind === "recall" ? recallToast(result.delivery) : replyToast(status), status === "sent" && result.delivery?.reconciled !== false ? "success" : "warning");
     } catch (error) {
       this.busy = false;
       if (this.reference !== reference) return;
@@ -517,6 +525,58 @@ export class Panel {
     } finally {
       this.busy = false;
     }
+  }
+
+  async sendRecall() {
+    const textarea = this.root.querySelector('textarea[data-draft="recall"]');
+    if (!textarea || this.busy) return;
+    const body = textarea.value.trim();
+    if (!body) { toast(t("panel.recallEmpty"), "warning"); return; }
+    const reference = this.reference;
+    let created = false;
+    this.busy = true;
+    try {
+      const result = await api.recallTask(reference, body);
+      created = true;
+      if (this.reference !== reference) return;
+      this.clearDraft("recall");
+      this.recallOpen = false;
+      const updated = await api.task(reference);
+      if (this.reference !== reference) return;
+      this.busy = false;
+      this.applyDetail(updated);
+      const status = result.delivery && result.delivery.status;
+      toast(recallToast(result.delivery), status === "sent" && result.delivery?.reconciled !== false ? "success" : "warning");
+    } catch (error) {
+      this.busy = false;
+      if (this.reference !== reference) return;
+      if (created) toast(t("toast.refreshFailed"), "warning");
+      else toastForError(error, t);
+      this.render();
+    } finally { this.busy = false; }
+  }
+
+  canRecall(detail) {
+    return this.isHuman() && detail.state === "active" &&
+      ["in_progress", "in_review"].includes(detail.status) &&
+      detail.session_id && detail.session_status === "idle" &&
+      Boolean(this.integration && this.integration.enabled);
+  }
+
+  renderRecall(detail) {
+    if (!this.canRecall(detail)) return null;
+    if (!this.recallOpen) return el("button", {
+      type: "button", class: "button button-secondary button-small", text: t("panel.recall"),
+      disabled: this.busy, onClick: () => { this.recallOpen = true; this.render(); }
+    });
+    const form = el("form", { class: "agent-question-form" }, [
+      el("textarea", { class: "input textarea", rows: "3", required: true,
+        "data-draft": "recall", placeholder: t("panel.recallPlaceholder"), "aria-label": t("panel.recallPlaceholder") }),
+      el("p", { class: "agent-question-warning", text: t("secret.replyWarning") }),
+      el("button", { type: "submit", class: "button button-primary button-small", disabled: this.busy, text: t("panel.recallSend") })
+    ]);
+    form.addEventListener("submit", (event) => { event.preventDefault(); this.sendRecall(); });
+    return this.section(t("panel.recall"), [form]);
   }
 
   renderLoading() {
@@ -681,6 +741,7 @@ export class Panel {
       this.renderSummary(detail, titleDraft),
       this.renderSecrets(detail),
       this.renderAgentQuestion(detail),
+      this.renderRecall(detail),
       detail.provenance ? this.section(t("imports.provenance"), [
         el("p", { text: `${detail.provenance.provider} · ${detail.provenance.kind}` }),
         sourceLink(detail.provenance.source_url)
@@ -1477,13 +1538,13 @@ export class Panel {
               ? t("panel.deliveryFailed")
               : t("panel.deliveryUnknown")
           }),
-          el("button", {
+          ...(comment.delivery_kind !== "recall" || (this.isHuman() && this.canRecall(detail)) ? [el("button", {
             type: "button",
             class: "button button-ghost button-small comment-retry",
             disabled: this.busy,
             text: failed ? t("panel.retry") : t("panel.retryAnyway"),
             onClick: () => this.retryReply(comment)
-          })
+          })] : [])
         );
       }
       const meta = el("span", { class: "comment-meta" }, [
@@ -1654,6 +1715,7 @@ export class Panel {
 
   activityText(entry) {
     const data = entry.data || {};
+    if (entry.kind === "recall_sent" && data.reconciled === false) return t("activity.recallChanged");
     const vars = {};
     if (entry.kind === "moved") {
       vars.from = data.from ? statusLabel(data.from) : "";

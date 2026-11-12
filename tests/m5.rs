@@ -6,7 +6,7 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -54,6 +54,9 @@ struct Mock {
     version_status: Arc<AtomicU16>,
     send_status: Arc<AtomicU16>,
     send_body: Arc<Mutex<Value>>,
+    hold_send: Arc<AtomicBool>,
+    send_started: Arc<tokio::sync::Notify>,
+    send_gate: Arc<tokio::sync::Semaphore>,
     list_queue: Arc<Mutex<VecDeque<(u16, Value)>>>,
     pairing_token: Arc<Mutex<String>>,
     pairing_status: Arc<AtomicU16>,
@@ -73,6 +76,9 @@ impl Mock {
             version_status: Arc::new(AtomicU16::new(200)),
             send_status: Arc::new(AtomicU16::new(200)),
             send_body: Arc::new(Mutex::new(json!({ "promptDispatched": true }))),
+            hold_send: Arc::new(AtomicBool::new(false)),
+            send_started: Arc::new(tokio::sync::Notify::new()),
+            send_gate: Arc::new(tokio::sync::Semaphore::new(0)),
             list_queue: Arc::new(Mutex::new(VecDeque::new())),
             pairing_token: Arc::new(Mutex::new("oc_client_paired".into())),
             pairing_status: Arc::new(AtomicU16::new(200)),
@@ -226,6 +232,10 @@ async fn mock_control(
             }
         }
         Some("session.send") => {
+            if mock.hold_send.load(Ordering::SeqCst) {
+                mock.send_started.notify_one();
+                mock.send_gate.acquire().await.expect("send gate").forget();
+            }
             let status = mock.send_status.load(Ordering::SeqCst);
             let body = mock
                 .send_body
@@ -2810,6 +2820,336 @@ async fn auto_accept_failure_keeps_the_dispatch_and_is_recorded() {
 
 // ---------------------------------------------------------------------------
 // Reply dialog
+
+async fn recall_card(app: &TestApp, cookie: &str) -> String {
+    let reference = app.blocked_card(cookie, "ALP", "question").await;
+    let id = app.detail(cookie, &reference).await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    app.state.db.call(move |db| {
+        db.execute("UPDATE tasks SET status='in_review',blocked_from=NULL,blocked_reason=NULL,session_status='idle',attention=1,claimed_by='agent' WHERE id=?1", [&id])?;
+        Ok(())
+    }).await.unwrap();
+    reference
+}
+
+#[tokio::test]
+async fn recall_success_preserves_session_and_records_instructions() {
+    let (url, mock) = start_mock().await;
+    let app = TestApp::new(Some(&url)).await;
+    let cookie = app.login().await;
+    let reference = recall_card(&app, &cookie).await;
+    let label = app
+        .post(
+            "/api/labels",
+            Some(json!({"name":"need_spec","color":"#abcdef"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(label.status, StatusCode::CREATED);
+    assert_eq!(
+        app.patch(
+            &format!("/api/tasks/{reference}"),
+            json!({"labels":[label.body["id"]]}),
+            &cookie
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    let mut events = app.state.events.subscribe();
+    let response = app
+        .post(
+            &format!("/api/tasks/{reference}/recall"),
+            Some(json!({"body":"Please address review"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::CREATED, "{:?}", response.body);
+    assert_eq!(response.body["comment"]["delivery_kind"], "recall");
+    assert_eq!(response.body["comment"]["body"], "Please address review");
+    assert_eq!(response.body["delivery"]["status"], "sent");
+    assert_eq!(response.body["delivery"]["reconciled"], true);
+    let created = events.try_recv().unwrap();
+    let changed = events.try_recv().unwrap();
+    let moved = events.try_recv().unwrap();
+    assert_eq!(created.kind, "comment.created");
+    assert_eq!(created.data["comment"]["delivery_status"], "unknown");
+    assert_eq!(changed.kind, "comment.updated");
+    assert_eq!(changed.data["comment"]["delivery_status"], "sent");
+    assert_eq!(moved.kind, "task.moved");
+    assert_eq!(moved.data["task"]["labels"][0]["name"], "need_spec");
+    let prompt = mock.send_requests()[0].body["input"]["prompt"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        prompt.contains(&reference)
+            && prompt.contains("Please address review")
+            && prompt.contains("need_spec")
+    );
+    let detail = app.detail(&cookie, &reference).await;
+    assert_eq!(detail["status"], "in_progress");
+    assert_eq!(detail["session_status"], "running");
+    assert_eq!(detail["attention"], false);
+    assert_eq!(detail["session_id"], "ses_reply");
+    assert_eq!(detail["session_directory"], "/tmp/kanso-session");
+    assert_eq!(detail["claimed_by"], "agent");
+    let comment = response.body["comment"]["id"].as_str().unwrap();
+    assert_eq!(
+        app.post(
+            &format!("/api/tasks/{reference}/recall/{comment}"),
+            None,
+            &cookie
+        )
+        .await
+        .status,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(mock.send_requests().len(), 1);
+}
+
+#[tokio::test]
+async fn recall_failed_and_unknown_can_retry_but_not_through_reply() {
+    for (upstream, expected) in [
+        (json!({"promptDispatched":false}), "failed"),
+        (json!({}), "unknown"),
+    ] {
+        let (url, mock) = start_mock().await;
+        mock.set_send(200, upstream);
+        let app = TestApp::new(Some(&url)).await;
+        let cookie = app.login().await;
+        let reference = recall_card(&app, &cookie).await;
+        let first = app
+            .post(
+                &format!("/api/tasks/{reference}/recall"),
+                Some(json!({"body":"Review this"})),
+                &cookie,
+            )
+            .await;
+        assert_eq!(first.body["delivery"]["status"], expected);
+        let comment = first.body["comment"]["id"].as_str().unwrap();
+        let detail = app.detail(&cookie, &reference).await;
+        assert_eq!(detail["status"], "in_review");
+        assert_eq!(detail["session_status"], "idle");
+        assert_eq!(detail["attention"], true);
+        let wrong = app
+            .post(
+                &format!("/api/tasks/{reference}/reply/{comment}"),
+                None,
+                &cookie,
+            )
+            .await;
+        assert_eq!(wrong.status, StatusCode::CONFLICT);
+        mock.set_send(200, json!({"promptDispatched":true}));
+        let retry = app
+            .post(
+                &format!("/api/tasks/{reference}/recall/{comment}"),
+                None,
+                &cookie,
+            )
+            .await;
+        assert_eq!(retry.status, StatusCode::OK, "{:?}", retry.body);
+        assert_eq!(retry.body["delivery"]["status"], "sent");
+        let sends = mock.send_requests();
+        assert_eq!(sends.len(), 2);
+        assert_eq!(
+            sends[0].body["input"]["prompt"],
+            sends[1].body["input"]["prompt"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn recall_requires_human_idle_active_and_nonempty() {
+    let (url, mock) = start_mock().await;
+    let app = TestApp::new(Some(&url)).await;
+    let cookie = app.login().await;
+    let reference = recall_card(&app, &cookie).await;
+    let path = format!("/api/tasks/{reference}/recall");
+    let token = app
+        .post(
+            "/api/tokens",
+            Some(json!({"name":"recall-agent","scope":"agent"})),
+            &cookie,
+        )
+        .await;
+    let bearer = token.body["token"].as_str().unwrap();
+    assert_eq!(
+        app.post_bearer(&path, Some(json!({"body":"instructions"})), bearer)
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.post(&path, Some(json!({"body":"  "})), &cookie)
+            .await
+            .status,
+        StatusCode::BAD_REQUEST
+    );
+    let id = app.detail(&cookie, &reference).await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for (state, status, session_status) in [
+        ("active", "blocker", "idle"),
+        ("active", "done", "idle"),
+        ("active", "in_progress", "running"),
+        ("active", "in_review", "waiting"),
+        ("active", "in_review", "failed"),
+        ("active", "in_review", "offline"),
+        ("archived", "in_review", "idle"),
+    ] {
+        let id = id.clone();
+        let state = state.to_owned();
+        let status = status.to_owned();
+        let session_status = session_status.to_owned();
+        app.state
+            .db
+            .call(move |db| {
+                db.execute(
+                    "UPDATE tasks SET state=?1,status=?2,session_status=?3 WHERE id=?4",
+                    rusqlite::params![state, status, session_status, id],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            app.post(&path, Some(json!({"body":"instructions"})), &cookie)
+                .await
+                .status,
+            StatusCode::CONFLICT
+        );
+    }
+    assert!(mock.send_requests().is_empty());
+}
+
+#[tokio::test]
+async fn recall_single_flight_and_changed_card_not_overwritten() {
+    let (url, mock) = start_mock().await;
+    mock.hold_send.store(true, Ordering::SeqCst);
+    let app = TestApp::new(Some(&url)).await;
+    let cookie = app.login().await;
+    let reference = recall_card(&app, &cookie).await;
+    let path = format!("/api/tasks/{reference}/recall");
+    let first = app.post(&path, Some(json!({"body":"work"})), &cookie);
+    let other = async {
+        tokio::time::timeout(Duration::from_secs(3), mock.send_started.notified())
+            .await
+            .unwrap();
+        let concurrent = app
+            .post(&path, Some(json!({"body":"duplicate"})), &cookie)
+            .await;
+        assert_eq!(concurrent.status, StatusCode::CONFLICT);
+        let detail = app.detail(&cookie, &reference).await;
+        let comment = detail["comments"].as_array().unwrap().last().unwrap()["id"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            app.post(&format!("{path}/{comment}"), None, &cookie)
+                .await
+                .status,
+            StatusCode::CONFLICT
+        );
+        let moved = app
+            .post(
+                &format!("/api/tasks/{reference}/move"),
+                Some(json!({"status":"done"})),
+                &cookie,
+            )
+            .await;
+        assert_eq!(moved.status, StatusCode::OK);
+        mock.send_gate.add_permits(1);
+    };
+    let (response, ()) = tokio::join!(first, other);
+    assert_eq!(response.body["delivery"]["status"], "sent");
+    assert_eq!(response.body["delivery"]["reconciled"], false);
+    let detail = app.detail(&cookie, &reference).await;
+    assert_eq!(detail["status"], "done");
+    assert_eq!(detail["session_status"], "idle");
+    assert_eq!(detail["attention"], true);
+    assert_eq!(mock.send_requests().len(), 1);
+}
+
+#[tokio::test]
+async fn recall_retry_requires_same_session_and_disabled_integration_is_rejected() {
+    let (url, mock) = start_mock().await;
+    mock.set_send(200, json!({"promptDispatched":false}));
+    let app = TestApp::new(Some(&url)).await;
+    let cookie = app.login().await;
+    let reference = recall_card(&app, &cookie).await;
+    let path = format!("/api/tasks/{reference}/recall");
+    let first = app
+        .post(&path, Some(json!({"body":"instructions"})), &cookie)
+        .await;
+    let comment = first.body["comment"]["id"].as_str().unwrap();
+    let missing = app.post(&format!("{path}/missing"), None, &cookie).await;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+    let task_id = app.detail(&cookie, &reference).await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    app.state
+        .db
+        .call(move |db| {
+            db.execute(
+                "UPDATE tasks SET session_id='ses_other' WHERE id=?1",
+                [&task_id],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let changed = app.post(&format!("{path}/{comment}"), None, &cookie).await;
+    assert_eq!(changed.code(), "recall_changed");
+    assert_eq!(mock.send_requests().len(), 1);
+    app.state.set_openchamber(None);
+    assert_eq!(
+        app.post(&path, Some(json!({"body":"instructions"})), &cookie)
+            .await
+            .code(),
+        "integration_disabled"
+    );
+    assert_eq!(
+        app.post(&format!("{path}/{comment}"), None, &cookie)
+            .await
+            .code(),
+        "integration_disabled"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_recall_retries_send_only_once() {
+    let (url, mock) = start_mock().await;
+    mock.set_send(200, json!({"promptDispatched":false}));
+    let app = TestApp::new(Some(&url)).await;
+    let cookie = app.login().await;
+    let reference = recall_card(&app, &cookie).await;
+    let path = format!("/api/tasks/{reference}/recall");
+    let first = app
+        .post(&path, Some(json!({"body":"instructions"})), &cookie)
+        .await;
+    let comment = first.body["comment"]["id"].as_str().unwrap();
+    let retry_path = format!("{path}/{comment}");
+    mock.set_send(200, json!({"promptDispatched":true}));
+    mock.hold_send.store(true, Ordering::SeqCst);
+    let retry = app.post(&retry_path, None, &cookie);
+    let other = async {
+        tokio::time::timeout(Duration::from_secs(3), mock.send_started.notified())
+            .await
+            .unwrap();
+        assert_eq!(
+            app.post(&retry_path, None, &cookie).await.code(),
+            "delivery_in_progress"
+        );
+        mock.send_gate.add_permits(1);
+    };
+    let (response, ()) = tokio::join!(retry, other);
+    assert_eq!(response.body["delivery"]["status"], "sent");
+    assert_eq!(mock.send_requests().len(), 2);
+}
 
 #[tokio::test]
 async fn reply_stores_a_comment_and_forwards_the_wrapper_to_the_session() {

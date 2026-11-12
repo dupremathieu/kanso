@@ -190,6 +190,12 @@ export const api = {
   retryReply: (reference, commentId) =>
     request(`/api/tasks/${enc(reference)}/reply/${enc(commentId)}`, { method: "POST" }),
 
+  recallTask: (reference, body) =>
+    request(`/api/tasks/${enc(reference)}/recall`, { method: "POST", body: { body } }),
+
+  retryRecall: (reference, commentId) =>
+    request(`/api/tasks/${enc(reference)}/recall/${enc(commentId)}`, { method: "POST" }),
+
   secretRequests: (reference) => request(`/api/tasks/${enc(reference)}/secrets`),
   submitSecret: (id, value) => request(`/api/secrets/${enc(id)}/submit`, { method: "POST", body: { value }, secret: true }),
   declineSecret: (id, explanation) => request(`/api/secrets/${enc(id)}/decline`, { method: "POST", body: { explanation: explanation || null } }),

@@ -377,6 +377,8 @@ be corrected.
 | `POST` | `/api/tasks/:ref/dispatch` | Human only; optional `{agent?,model?,worktree?}` overrides; creates an OpenChamber session for the card when the adapter is enabled. `worktree` is a boolean defaulting to the project setting. |
 | `POST` | `/api/tasks/:ref/reply` | Human only; `{body}`; records the answer as a comment and forwards it into the card's OpenChamber session |
 | `POST` | `/api/tasks/:ref/reply/:comment_id` | Human only; retries a failed or unknown reply with the stored prompt and session |
+| `POST` | `/api/tasks/:ref/recall` | Human only; `{body}`; sends instructions to the existing idle session |
+| `POST` | `/api/tasks/:ref/recall/:comment_id` | Human only; explicitly retries a failed or unknown recall |
 | `POST` | `/api/tasks/:ref/dependencies` | `{blocked_by:[ref,…]}` replaces the set; `[]` clears it (human only) |
 | `POST` | `/api/tasks/:ref/archive` | Human only in M2 |
 | `POST` | `/api/tasks/:ref/restore` | Human only in M2 |
@@ -434,6 +436,22 @@ Kanso sets the card's `session_status` to `running`, clears `attention` and
 leaves the status alone, so the agent remains responsible for moving the card
 out of `blocker`. The panel notifies the human when a card enters `blocker` with
 a reason or a session.
+
+For an active `in_progress` or `in_review` card with an idle linked session,
+humans can use **Re-call agent** or `POST /api/tasks/:ref/recall` with a
+nonempty `{ "body": "instructions" }`. Integration must be enabled. The
+instructions are saved as a comment before sending to the existing session;
+no session, worktree or claim is replaced. The response has the same delivery
+statuses as replies, and the comment has `delivery_kind: "recall"`. On
+confirmed delivery the card moves to `in_progress`, its session becomes
+`running`, and attention clears, provided the card has not changed during the
+send. If it has changed, the delivery remains recorded but the newer card state
+is not overwritten; `delivery.reconciled` is `false` and the panel warns the
+human. Failed and unknown deliveries leave the card unchanged;
+`POST /api/tasks/:ref/recall/:comment_id` explicitly retries the stored prompt
+against the same session when the card is eligible. Unknown delivery may have
+already arrived, so retrying can duplicate the instructions. Recall and blocker
+reply retries are separate; sent recalls cannot be retried.
 
 An agent-scope bearer token may send `X-Kanso-Agent: <name>` to override its
 token name in comments, activity and `created_by`. Claim ownership (`claimed_by`,
@@ -555,7 +573,7 @@ delete checklist items or comments, or manage projects/labels/tokens.
 Every task mutation writes an `activity` row (`created`, `proposed`, `updated`,
 `moved`, `blocked`, `unblocked`, `claimed`, `released`, `accepted`, `rejected`,
 `dependencies_changed`, `commented`, `comment_removed`, `reply_sent`,
-`reply_failed`, `reply_unknown`, `checklist_added`, `checklist_updated`,
+`reply_failed`, `reply_unknown`, `recall_sent`, `recall_failed`, `recall_unknown`, `checklist_added`, `checklist_updated`,
 `checklist_removed`, `label_added`, `label_removed`, `session_linked`,
 `dispatched`, `session_idle`, `session_failed`,
 `session_offline`, `session_running`, `permission_auto_accept_failed`,
@@ -564,6 +582,8 @@ with a small JSON `data` payload. `blocked` carries the `reason`, and a `moved`
 row carries `reason` when the reason changes while the card is already blocked.
 Each reply attempt writes `reply_sent`, `reply_failed` or `reply_unknown` with
 `comment_id`, `session_id` and, on failure, `error`.
+Recall attempts carry those fields and `reconciled` (`true` or `false` for
+confirmed delivery, `null` otherwise).
 
 The data directory also holds `session.key`, a random 0600 HMAC key used to sign
 session cookies; deleting it revokes every UI session.

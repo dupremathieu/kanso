@@ -39,6 +39,7 @@ mod labels;
 pub(crate) mod model;
 mod models;
 mod projects;
+mod recall;
 mod reply;
 pub(crate) mod secret;
 mod session;
@@ -454,6 +455,11 @@ pub fn routes() -> Router<AppState> {
             axum::routing::delete(comments::delete),
         )
         .route("/api/tasks/{reference}/reply", post(reply::create))
+        .route("/api/tasks/{reference}/recall", post(recall::create))
+        .route(
+            "/api/tasks/{reference}/recall/{comment_id}",
+            post(recall::retry),
+        )
         .route(
             "/api/tasks/{reference}/secrets",
             post(secret::create).get(secret::list),
