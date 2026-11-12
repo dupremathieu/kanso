@@ -843,7 +843,7 @@ pub fn parse_model(raw: &str) -> Result<Option<ModelSpec>, String> {
 /// An explicit dispatch selection wins over the project setting. The effective
 /// model is split so OpenChamber receives `model` and `variant` separately; a
 /// value without `#` sends no `variant` at all.
-/// Project prompt text comes first; the built-in template is always appended.
+/// The built-in template comes first; project prompt text is appended if present.
 pub fn build_session_create(
     project: &Project,
     task: &Task,
@@ -853,7 +853,7 @@ pub fn build_session_create(
         .prompt_template
         .as_deref()
         .filter(|template| !template.trim().is_empty())
-        .map(|template| format!("{template}\n\n{DEFAULT_PROMPT_TEMPLATE}"));
+        .map(|template| format!("{DEFAULT_PROMPT_TEMPLATE}\n\n{template}"));
     let prompt = render_prompt(
         template.as_deref().unwrap_or(DEFAULT_PROMPT_TEMPLATE),
         &PromptValues {
@@ -1083,7 +1083,7 @@ mod tests {
         assert_eq!(
             input["prompt"],
             format!(
-                "Card ALP-42 — Fix it\nAlpha\nSome details.\n\n{}",
+                "{}\n\nCard ALP-42 — Fix it\nAlpha\nSome details.",
                 render_prompt(
                     DEFAULT_PROMPT_TEMPLATE,
                     &PromptValues {
