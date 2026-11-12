@@ -33,6 +33,22 @@ const MODULES: [&str; 12] = [
 ];
 
 #[test]
+fn label_settings_exposes_creation_to_humans() {
+    let script = std::fs::read_to_string(repository_web_dir().join("app.js")).unwrap();
+    let section = script
+        .split("page.append(el(\"h2\", { class: \"settings-section-title\", text: t(\"label.title\") }));")
+        .nth(1)
+        .unwrap()
+        .split("const labelList")
+        .next()
+        .unwrap();
+    assert!(section.contains("if (human)"));
+    assert!(section.contains("t(\"panel.newLabel\")"));
+    assert!(section
+        .contains("openLabelForm({ projects, onCreated: () => renderSettingsProjects(token) })"));
+}
+
+#[test]
 fn github_device_screen_does_not_use_persistent_browser_storage() {
     let screen = std::fs::read_to_string(repository_web_dir().join("github-settings.js")).unwrap();
     assert!(!screen.contains("localStorage"));

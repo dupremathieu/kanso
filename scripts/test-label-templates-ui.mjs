@@ -60,6 +60,14 @@ try {
   assert.equal(labelResponse.status(), 201);
   const label = await labelResponse.json();
   await page.goto(`${base}/settings/projects`);
+  await page.getByRole("button", { name: "New label", exact: true }).click();
+  const createDialog = page.getByRole("dialog");
+  await createDialog.getByLabel("Name", { exact: true }).fill("settings-created");
+  await createDialog.getByRole("button", { name: "Create", exact: true }).click();
+  await createDialog.waitFor({ state: "hidden" });
+  await page.locator("article.settings-row").filter({ hasText: "settings-created" }).waitFor();
+  const createdLabels = await (await page.request.get(`${base}/api/labels`)).json();
+  assert.ok(createdLabels.some((item) => item.name === "settings-created"));
   const labelRow = page.locator("article.settings-row").filter({ hasText: "security" });
   await labelRow.getByText("Prompt template set", { exact: true }).waitFor();
   const editLabel = page.locator("article.settings-row").filter({ hasText: "security" }).getByRole("button", { name: "Edit", exact: true });
