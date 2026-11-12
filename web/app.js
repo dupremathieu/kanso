@@ -1968,7 +1968,11 @@ function applyDetailToStore(detail, { render = true } = {}) {
   const card = cardFromDetail(detail);
   if (detail.state === "active") {
     if (location) {
-      if (location.status === detail.status) {
+      if (location.board.project.id !== detail.project_id) {
+        location.board.columns[location.status].splice(location.index, 1);
+        const destination = findBoardByProjectId(detail.project_id);
+        if (destination?.columns[detail.status]) destination.columns[detail.status].push(card);
+      } else if (location.status === detail.status) {
         location.board.columns[location.status][location.index] = card;
       } else {
         location.board.columns[location.status].splice(location.index, 1);
@@ -2262,9 +2266,12 @@ function upsertTask(task) {
     return card;
   }
   const board = findBoardByProjectId(task.project_id);
-  if (!board || !board.columns[task.status]) return card;
+  if (!board || !board.columns[task.status]) {
+    if (existing) existing.board.columns[existing.status].splice(existing.index, 1);
+    return card;
+  }
   if (existing) {
-    if (existing.status === task.status) {
+    if (existing.board === board && existing.status === task.status) {
       board.columns[task.status][existing.index] = card;
     } else {
       existing.board.columns[existing.status].splice(existing.index, 1);

@@ -180,8 +180,12 @@ pub async fn dispatch(
     let stored = match store_dispatch(
         &state,
         task_id.clone(),
-        expected_status,
-        expected_session_id,
+        DispatchExpected {
+            project_id: task.project_id.clone(),
+            number: task.number,
+            status: expected_status,
+            session_id: expected_session_id,
+        },
         actor,
         session_id.clone(),
         directory.clone(),
@@ -268,11 +272,17 @@ fn map_error(error: &OpenChamberError) -> ApiError {
     }
 }
 
+struct DispatchExpected {
+    project_id: String,
+    number: i64,
+    status: String,
+    session_id: Option<String>,
+}
+
 async fn store_dispatch(
     state: &AppState,
     task_id: String,
-    expected_status: String,
-    expected_session_id: Option<String>,
+    expected: DispatchExpected,
     actor: String,
     session_id: String,
     directory: String,
@@ -290,8 +300,10 @@ async fn store_dispatch(
             // The upstream call can take minutes: never override a move,
             // archive or claim the human made while it was running.
             if task.state != "active"
-                || task.status != expected_status
-                || task.session_id != expected_session_id
+                || task.project_id != expected.project_id
+                || task.number != expected.number
+                || task.status != expected.status
+                || task.session_id != expected.session_id
             {
                 return Ok(Stored::Changed);
             }

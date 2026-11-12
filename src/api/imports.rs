@@ -388,7 +388,7 @@ fn import_candidate(
     }
 
     let number: i64 = tx.query_row(
-        "SELECT COALESCE(MAX(number), 0) + 1 FROM tasks WHERE project_id = ?1",
+        "SELECT MAX(COALESCE((SELECT MAX(number) FROM tasks WHERE project_id = ?1), 0), COALESCE((SELECT MAX(a.number) FROM task_reference_aliases a JOIN projects p ON p.key = a.project_key WHERE p.id = ?1), 0)) + 1",
         [project],
         |row| row.get(0),
     )?;

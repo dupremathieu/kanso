@@ -16,6 +16,219 @@ const PASSWORD: &str = "correct horse";
 const ORIGIN: &str = "https://kanso.example";
 
 #[tokio::test]
+async fn project_move_updates_import_provenance_and_rejects_duplicates() {
+    let app = TestApp::new();
+    let cookie = app.login().await;
+    let a = app.create_project(&cookie, "AAA").await;
+    let b = app.create_project(&cookie, "BBB").await;
+    let task = app
+        .create_task(&cookie, json!({"project_key":"AAA", "title":"imported"}))
+        .await;
+    let other = app
+        .create_task(&cookie, json!({"project_key":"BBB", "title":"duplicate"}))
+        .await;
+    let aid = a["id"].as_str().unwrap().to_owned();
+    let bid = b["id"].as_str().unwrap().to_owned();
+    let tid = task["id"].as_str().unwrap().to_owned();
+    let oid = other["id"].as_str().unwrap().to_owned();
+    let (a2, b2, t2, o2) = (aid.clone(), bid.clone(), tid.clone(), oid.clone());
+    app.state.db.call(move |db| {
+        db.execute("INSERT INTO task_provenance VALUES (?1,?2,'github','same','issue','https://example.com')", rusqlite::params![t2,a2])?;
+        db.execute("INSERT INTO task_provenance VALUES (?1,?2,'github','same','issue','https://example.com')", rusqlite::params![o2,b2])?;
+        Ok(())
+    }).await.unwrap();
+    let response = app
+        .cookie_post(
+            "/api/tasks/AAA-1/project",
+            Some(json!({"project":"BBB"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::CONFLICT);
+    app.state
+        .db
+        .call(move |db| {
+            db.execute("DELETE FROM task_provenance WHERE task_id = ?1", [&oid])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let response = app
+        .cookie_post(
+            "/api/tasks/AAA-1/project",
+            Some(json!({"project":"BBB"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::OK);
+    let project = app
+        .state
+        .db
+        .call(move |db| {
+            Ok(db.query_row(
+                "SELECT project_id FROM task_provenance WHERE task_id = ?1",
+                [&tid],
+                |r| r.get::<_, String>(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(project, bid);
+}
+
+#[tokio::test]
+async fn project_moves_preserve_aliases_and_reserve_numbers_and_keys() {
+    let app = TestApp::new();
+    let cookie = app.login().await;
+    app.create_project(&cookie, "AAA").await;
+    app.create_project(&cookie, "BBB").await;
+    let original = app
+        .create_task(&cookie, json!({"project_key":"AAA", "title":"move me"}))
+        .await;
+    let moved = app
+        .cookie_post(
+            "/api/tasks/AAA-1/project",
+            Some(json!({"project":"BBB"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(moved.status, StatusCode::OK, "{:?}", moved.body);
+    assert_eq!(moved.body["reference"], "BBB-1");
+    assert_eq!(moved.body["id"], original["id"]);
+    let old = app.get("/api/tasks/AAA-1", Some(&cookie), None).await;
+    assert_eq!(old.body["reference"], "BBB-1");
+    let next = app
+        .create_task(&cookie, json!({"project_key":"AAA", "title":"next"}))
+        .await;
+    assert_eq!(next["reference"], "AAA-2");
+    let back = app
+        .cookie_post(
+            "/api/tasks/AAA-1/project",
+            Some(json!({"project":"AAA"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(back.status, StatusCode::OK, "{:?}", back.body);
+    assert_eq!(back.body["reference"], "AAA-3");
+    assert_eq!(
+        app.get("/api/tasks/BBB-1", Some(&cookie), None).await.body["reference"],
+        "AAA-3"
+    );
+    let renamed = app
+        .cookie_patch("/api/projects/AAA", json!({"key":"CCC"}), &cookie)
+        .await;
+    assert_eq!(renamed.status, StatusCode::OK);
+    let reserved = app
+        .cookie_post(
+            "/api/projects",
+            Some(json!({"key":"AAA", "name":"other"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(reserved.status, StatusCode::CONFLICT);
+    assert_eq!(
+        app.get("/api/tasks/AAA-1", Some(&cookie), None).await.body["reference"],
+        "CCC-3"
+    );
+    assert_eq!(
+        app.cookie_delete("/api/tasks/CCC-3?hard=true", &cookie)
+            .await
+            .status,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.get("/api/tasks/AAA-1", Some(&cookie), None)
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.cookie_post(
+            "/api/projects",
+            Some(json!({"key":"AAA", "name":"other"})),
+            &cookie
+        )
+        .await
+        .status,
+        StatusCode::CONFLICT
+    );
+}
+
+#[tokio::test]
+async fn project_moves_reject_agents_claimed_tasks_and_archived_projects() {
+    let app = TestApp::new();
+    let cookie = app.login().await;
+    app.create_project(&cookie, "AAA").await;
+    app.create_project(&cookie, "BBB").await;
+    app.create_task(&cookie, json!({"project_key":"AAA", "title":"move me"}))
+        .await;
+    let token = app.create_token(&cookie, "agent", "agent").await;
+    let response = app
+        .request(
+            Method::POST,
+            "/api/tasks/AAA-1/project",
+            Some(json!({"project":"BBB"})),
+            None,
+            token["token"].as_str(),
+            None,
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    let claimed = app
+        .cookie_post("/api/tasks/AAA-1/claim", None, &cookie)
+        .await;
+    assert_eq!(claimed.status, StatusCode::OK);
+    let response = app
+        .cookie_post(
+            "/api/tasks/AAA-1/project",
+            Some(json!({"project":"BBB"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::CONFLICT);
+    app.cookie_post("/api/tasks/AAA-1/release", None, &cookie)
+        .await;
+    let linked = app
+        .cookie_post(
+            "/api/tasks/AAA-1/session",
+            Some(json!({"session_id":"ses_test", "directory":"/work"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(linked.status, StatusCode::OK);
+    assert_eq!(
+        app.cookie_post(
+            "/api/tasks/AAA-1/project",
+            Some(json!({"project":"BBB"})),
+            &cookie
+        )
+        .await
+        .status,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        app.cookie_delete("/api/tasks/AAA-1/session", &cookie)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    app.cookie_post("/api/projects/BBB/archive", None, &cookie)
+        .await;
+    let response = app
+        .cookie_post(
+            "/api/tasks/AAA-1/project",
+            Some(json!({"project":"BBB"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::CONFLICT);
+    assert_eq!(
+        app.get("/api/tasks/AAA-1", Some(&cookie), None).await.body["reference"],
+        "AAA-1"
+    );
+}
+
+#[tokio::test]
 async fn github_auth_requires_a_human_session_csrf_and_no_store() {
     let app = TestApp::new();
     let cookie = app.login().await;

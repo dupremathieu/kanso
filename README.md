@@ -133,6 +133,7 @@ override the file per value; `KANSO_CONFIG` overrides its path.
 kanso project list | add --key ALP --name Alpha | show ALP | edit ALP --name …
 kanso task list [--project ALP] [--status todo] [--label bug] [--mine]
 kanso task show ALP-42
+kanso task move-project ALP-42 --project OTHER
 kanso task add "Title" --project ALP [--description …] [--status todo] [--priority high] [--label NAME|ID]…
 kanso task edit ALP-42 [--title …] [--description …] [--due 2026-12-01]
 kanso next [--project ALP] [--claim]
@@ -145,6 +146,7 @@ kanso depend ALP-42 on ALP-40
 kanso propose "Idea" --project ALP [--description …] [--label NAME|ID]…
 kanso inbox
 kanso session link ALP-42 ses_… --directory /path/to/worktree
+kanso session unlink ALP-42
 kanso token create --name build --scope agent   # prints the token once
 kanso token list | revoke build
 kanso skill [--print] [--install [--dir ~/.config/opencode/skills]]
@@ -355,9 +357,11 @@ be corrected.
 | `GET` | `/api/tasks/:ref` | `ALP-42` (case-insensitive) or UUID; includes labels, checklist, comments, activity and dependencies |
 | `PATCH` | `/api/tasks/:ref` | `title`, `description`, `priority`, `due_date`, `labels`; other fields are rejected |
 | `POST` | `/api/tasks/:ref/move` | `{status?,before?,after?,restore?,reason?}`; `reason` (max 500 characters) is stored in `blocked_reason` when entering `blocker` |
+| `POST` | `/api/tasks/:ref/project` | Human only; `{project}` (destination key or id). Requires an unclaimed task without a linked session and an unarchived destination. |
 | `POST` | `/api/tasks/:ref/claim` | Human or agent; sets `claimed_by`, status → `in_progress` |
 | `POST` | `/api/tasks/:ref/release` | Clears the claim, keeps the column |
 | `POST` | `/api/tasks/:ref/session` | Human only; `{session_id,directory,status?}` with status `running` by default (also `idle`, `waiting`, `failed`, `offline`) |
+| `DELETE` | `/api/tasks/:ref/session` | Human only; unlinks without stopping the session and invalidates pending secret handoffs. |
 | `POST` | `/api/tasks/:ref/dispatch` | Human only; optional `{agent?,model?,worktree?}` overrides; creates an OpenChamber session for the card when the adapter is enabled. `worktree` is a boolean defaulting to the project setting. |
 | `POST` | `/api/tasks/:ref/reply` | Human only; `{body}`; records the answer as a comment and forwards it into the card's OpenChamber session |
 | `POST` | `/api/tasks/:ref/reply/:comment_id` | Human only; retries a failed or unknown reply with the stored prompt and session |
@@ -365,6 +369,12 @@ be corrected.
 | `POST` | `/api/tasks/:ref/archive` | Human only in M2 |
 | `POST` | `/api/tasks/:ref/restore` | Human only in M2 |
 | `DELETE` | `/api/tasks/:ref?hard=true` | Human only; cascades to children |
+
+Project moves preserve the task and its relationships, assign a new destination
+reference, and reserve all old references as aliases. Project keys used by
+aliases cannot be adopted by another project. The destination column is
+appended to; status and state do not change. An imported task cannot be moved
+into a project that already contains a task from the same external source.
 
 `GET /api/tasks` defaults to `state=active`; use `?state=archived` or
 `?state=proposed` for the archive or the proposal inbox. Task numbers are
@@ -492,7 +502,7 @@ the full reordered `checklist`), and `checklist.deleted` carries `task_id` and
 | `DELETE` | `/api/tasks/:ref/checklist/:item` | Human only in M2 |
 | `GET`/`POST` | `/api/tokens` | `{name,scope}`; the `kanso_` token is returned once only; `ui` is reserved |
 | `DELETE` | `/api/tokens/:id` | Revoke; repeating it is idempotent |
-| `GET` | `/api/export.json` | Human only; versioned dump of projects, labels, all cards (with checklists and dependencies) and comments; downloadable attachment with `Cache-Control: no-store` |
+| `GET` | `/api/export.json` | Human only; versioned dump of projects, labels, all cards (with checklists and dependencies), comments and `task_reference_aliases`; downloadable attachment with `Cache-Control: no-store` |
 | `POST` | `/api/backup` | Human only; `VACUUM INTO` under `<data_dir>/backups/`; body `{dir?}` resolves under the data directory |
 
 Label names are unique case-insensitively and colors use `#rrggbb`. Labels are

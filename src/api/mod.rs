@@ -424,9 +424,13 @@ pub fn routes() -> Router<AppState> {
         .route("/api/tasks/{reference}/archive", post(tasks::archive))
         .route("/api/tasks/{reference}/restore", post(tasks::restore))
         .route("/api/tasks/{reference}/move", post(tasks::move_task))
+        .route("/api/tasks/{reference}/project", post(tasks::move_project))
         .route("/api/tasks/{reference}/claim", post(tasks::claim))
         .route("/api/tasks/{reference}/release", post(tasks::release))
-        .route("/api/tasks/{reference}/session", post(tasks::link_session))
+        .route(
+            "/api/tasks/{reference}/session",
+            post(tasks::link_session).delete(tasks::unlink_session),
+        )
         .route("/api/tasks/{reference}/dispatch", post(dispatch::dispatch))
         .route(
             "/api/tasks/{reference}/dependencies",

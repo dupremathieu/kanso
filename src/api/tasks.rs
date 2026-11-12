@@ -86,6 +86,12 @@ pub struct MoveTask {
     reason: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MoveProject {
+    project: String,
+}
+
 const MAX_BLOCKED_REASON_CHARS: usize = 500;
 
 fn validate_blocked_reason(raw: &str) -> Result<Option<String>, ApiError> {
@@ -216,12 +222,65 @@ pub(crate) fn task_by_ref(
             .map_err(Into::into),
         TaskReference::Number { key, number } => connection
             .query_row(
-                &format!("{sql} WHERE p.key = ?1 COLLATE NOCASE AND t.number = ?2"),
+                &format!("{sql} WHERE (p.key = ?1 COLLATE NOCASE AND t.number = ?2) OR t.id = (SELECT task_id FROM task_reference_aliases WHERE project_key = ?1 COLLATE NOCASE AND number = ?2)"),
                 params![key, number],
                 Task::from_row,
             )
             .optional()
             .map_err(Into::into),
+    }
+}
+
+pub async fn move_project(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(reference): Path<String>,
+    ApiJson(payload): ApiJson<MoveProject>,
+) -> Result<Json<TaskDetail>, ApiError> {
+    require_human(&auth.0)?;
+    let actor = auth.0.actor().to_owned();
+    let outcome = state.db.call(move |connection| {
+        let tx = connection.transaction()?;
+        let Some(task) = task_by_ref(&tx, &reference)? else { return Ok(Err("task not found")); };
+        let destination: Option<(String, Option<i64>)> = tx.query_row(
+            "SELECT id, archived_at FROM projects WHERE id = ?1 OR key = ?1 COLLATE NOCASE",
+            [&payload.project], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?;
+        let Some((project_id, archived_at)) = destination else { return Ok(Err("destination project not found")); };
+        if archived_at.is_some() { return Ok(Err("destination project is archived")); }
+        if project_id == task.project_id { return Ok(Err("task is already in this project")); }
+        if task.claimed_by.is_some() || task.session_id.is_some() || task.session_directory.is_some() {
+            return Ok(Err("release the claim and unlink the session before moving this task"));
+        }
+        let duplicate: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM task_provenance source JOIN task_provenance dest ON dest.project_id = ?1 AND dest.provider = source.provider AND dest.identity = source.identity WHERE source.task_id = ?2)",
+            params![project_id, task.id], |row| row.get(0),
+        )?;
+        if duplicate { return Ok(Err("destination already contains a task imported from the same source")); }
+        let number: i64 = tx.query_row(
+            "SELECT MAX(COALESCE((SELECT MAX(number) FROM tasks WHERE project_id = ?1), 0), COALESCE((SELECT MAX(a.number) FROM task_reference_aliases a JOIN projects p ON p.key = a.project_key WHERE p.id = ?1), 0)) + 1",
+            [&project_id], |row| row.get(0),
+        )?;
+        let max_rank: Option<f64> = tx.query_row("SELECT MAX(rank) FROM tasks WHERE project_id = ?1 AND status = ?2", params![project_id, task.status], |row| row.get(0))?;
+        tx.execute("INSERT INTO task_reference_aliases (project_key, number, project_id, task_id) VALUES (?1, ?2, ?3, ?4)", params![task.project_key, task.number, task.project_id, task.id])?;
+        tx.execute("UPDATE tasks SET project_id = ?1, number = ?2, rank = ?3, updated_at = ?4 WHERE id = ?5", params![project_id, number, rank::append(max_rank), now_millis(), task.id])?;
+        tx.execute("UPDATE task_provenance SET project_id = ?1 WHERE task_id = ?2", params![project_id, task.id])?;
+        let updated = task_by_ref(&tx, &task.id)?.ok_or_else(|| crate::error::Error::msg("moved task missing"))?;
+        insert_activity(&tx, &task.id, &actor, "project_changed", &json!({"from": task.reference, "to": updated.reference}))?;
+        let detail = task_detail(&tx, updated)?;
+        tx.commit()?;
+        Ok(Ok(detail))
+    }).await?;
+    match outcome {
+        Ok(detail) => {
+            state.publish("task.updated", json!({ "task": &detail.task }));
+            Ok(Json(detail))
+        }
+        Err("task not found") => Err(ApiError::not_found("task not found")),
+        Err("destination project not found") => {
+            Err(ApiError::not_found("destination project not found"))
+        }
+        Err(message) => Err(ApiError::conflict(message)),
     }
 }
 
@@ -778,7 +837,7 @@ pub async fn create(
             }
 
             let number: i64 = transaction.query_row(
-                "SELECT COALESCE(MAX(number), 0) + 1 FROM tasks WHERE project_id = ?1",
+                "SELECT MAX(COALESCE((SELECT MAX(number) FROM tasks WHERE project_id = ?1), 0), COALESCE((SELECT MAX(a.number) FROM task_reference_aliases a JOIN projects p ON p.key = a.project_key WHERE p.id = ?1), 0)) + 1",
                 [&project_id],
                 |row| row.get(0),
             )?;
@@ -1531,6 +1590,27 @@ pub async fn link_session(
         }
         LinkOutcome::NotFound => Err(ApiError::not_found("task not found")),
     }
+}
+
+pub async fn unlink_session(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(reference): Path<String>,
+) -> Result<Json<TaskDetail>, ApiError> {
+    require_human(&auth.0)?;
+    let actor = auth.0.actor().to_owned();
+    let detail = state.db.call(move |connection| {
+        let tx = connection.transaction()?;
+        let Some(task) = task_by_ref(&tx, &reference)? else { return Ok(None); };
+        tx.execute("UPDATE tasks SET session_id = NULL, session_directory = NULL, session_status = NULL, updated_at = ?1 WHERE id = ?2", params![now_millis(), task.id])?;
+        insert_activity(&tx, &task.id, &actor, "session_unlinked", &json!({"session_id": task.session_id}))?;
+        let updated = task_by_ref(&tx, &task.id)?.ok_or_else(|| crate::error::Error::msg("unlinked task missing"))?;
+        let detail = task_detail(&tx, updated)?;
+        tx.commit()?;
+        Ok(Some(detail))
+    }).await?.ok_or_else(|| ApiError::not_found("task not found"))?;
+    state.publish("task.updated", json!({"task": &detail.task}));
+    Ok(Json(detail))
 }
 
 pub async fn archive(

@@ -157,6 +157,11 @@ export const api = {
   moveTask: (reference, payload) =>
     request(`/api/tasks/${enc(reference)}/move`, { method: "POST", body: payload }),
 
+  moveTaskProject: (reference, project) =>
+    request(`/api/tasks/${enc(reference)}/project`, { method: "POST", body: { project } }),
+
+  unlinkSession: (reference) => request(`/api/tasks/${enc(reference)}/session`, { method: "DELETE" }),
+
   claimTask: (reference) => request(`/api/tasks/${enc(reference)}/claim`, { method: "POST" }),
 
   releaseTask: (reference) => request(`/api/tasks/${enc(reference)}/release`, { method: "POST" }),
