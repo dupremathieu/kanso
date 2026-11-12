@@ -19,6 +19,7 @@ pub const MIGRATIONS: &[&str] = &[
     include_str!("migrations/v6.sql"),
     include_str!("migrations/v7.sql"),
     include_str!("migrations/v8.sql"),
+    include_str!("migrations/v9.sql"),
 ];
 
 /// Open the database and apply the connection-level pragmas.
@@ -292,7 +293,7 @@ mod tests {
         let version: u32 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("read user_version");
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
 
         let mut statement = connection
             .prepare(
@@ -357,13 +358,13 @@ mod tests {
         let path = dir.path().join("kanso.db");
         let mut connection = open(&path).expect("open database");
 
-        assert_eq!(migrate(&mut connection).expect("first migration"), 8);
-        assert_eq!(migrate(&mut connection).expect("second migration"), 8);
+        assert_eq!(migrate(&mut connection).expect("first migration"), 9);
+        assert_eq!(migrate(&mut connection).expect("second migration"), 9);
 
         let version: u32 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("read user_version");
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
     }
 
     #[test]
@@ -388,6 +389,35 @@ mod tests {
             .query_row("SELECT count(*) FROM label_projects", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn upgrade_v8_adds_nullable_label_prompt_templates() {
+        let dir = TempDir::new();
+        let mut connection = open(&dir.path().join("kanso.db")).unwrap();
+        apply(&mut connection, &MIGRATIONS[..8]).unwrap();
+        connection
+            .execute(
+                "INSERT INTO labels (id, name, color, is_global)
+                 VALUES ('l', 'bug', '#123456', 1)",
+                [],
+            )
+            .unwrap();
+        assert_eq!(migrate(&mut connection).unwrap(), 9);
+        let template: Option<String> = connection
+            .query_row(
+                "SELECT prompt_template FROM labels WHERE id = 'l'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(template, None);
+        let name: String = connection
+            .query_row("SELECT name FROM labels WHERE id = 'l'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(name, "bug");
     }
 
     #[test]
@@ -453,7 +483,7 @@ mod tests {
             )
             .expect("seed v1 rows");
 
-        assert_eq!(migrate(&mut connection).expect("migrate to latest"), 8);
+        assert_eq!(migrate(&mut connection).expect("migrate to latest"), 9);
 
         let mut statement = connection
             .prepare("PRAGMA index_info('checklist_task')")
@@ -507,7 +537,7 @@ mod tests {
             )
             .expect("seed v2 rows");
 
-        assert_eq!(migrate(&mut connection).expect("migrate to latest"), 8);
+        assert_eq!(migrate(&mut connection).expect("migrate to latest"), 9);
 
         let mut statement = connection
             .prepare("PRAGMA table_info('comments')")
@@ -543,7 +573,7 @@ mod tests {
         let mut connection = open(&dir.path().join("kanso.db")).unwrap();
         apply(&mut connection, &MIGRATIONS[..4]).unwrap();
         connection.execute_batch("INSERT INTO projects (id,key,name,position,created_at,updated_at) VALUES ('p','ABC','Existing',1,1,1); INSERT INTO tasks (id,project_id,number,title,status,rank,created_at,updated_at) VALUES ('t','p',1,'Existing','todo',1,1,1), ('u','p',2,'Second','todo',2,1,1);").unwrap();
-        assert_eq!(migrate(&mut connection).unwrap(), 8);
+        assert_eq!(migrate(&mut connection).unwrap(), 9);
         assert_eq!(
             connection
                 .query_row("SELECT title FROM tasks WHERE id='t'", [], |r| r

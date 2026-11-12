@@ -14,8 +14,9 @@ running, testing and configuring the project.
 
 - Project boards with seven fixed columns, drag & drop, a global cross-project
   view and a proposal inbox.
-- Cards with Markdown descriptions, labels, due dates, checklists, comments,
-  dependencies, claims and an activity log.
+- Cards with Markdown descriptions, labels (optionally carrying a session prompt
+  template), due dates, checklists, comments, dependencies, claims and an
+  activity log.
 - A CLI and agent skill for the pull flow, plus an optional OpenChamber adapter
   that dispatches a card into an agent session and follows it.
 - A versioned JSON export of every project, card, label and comment from
@@ -483,8 +484,8 @@ the full reordered `checklist`), and `checklist.deleted` carries `task_id` and
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `GET`/`POST` | `/api/labels` | Create with `{name,color,is_global?,project_ids?}`; list all labels or use `?project=ID_OR_KEY` to filter by availability |
-| `PATCH`/`DELETE` | `/api/labels/:id` | Deleting detaches the label from cards |
+| `GET`/`POST` | `/api/labels` | Create with `{name,color,is_global?,project_ids?,prompt_template?}`; list all labels or use `?project=ID_OR_KEY` to filter by availability |
+| `PATCH`/`DELETE` | `/api/labels/:id` | `prompt_template: null` clears it and omitting it keeps it; deleting detaches the label from cards |
 | `POST` | `/api/tasks/:ref/comment` | `{body}`; author is `ui`, the token name, or `X-Kanso-Agent` for an agent token |
 | `POST` | `/api/tasks/:ref/checklist` | `{text}` |
 | `PATCH` | `/api/tasks/:ref/checklist/:item` | `{text?,done?,before?,after?}`; `after` names the preceding item and `before` the following one |
@@ -502,6 +503,19 @@ a label requires `is_global: false`; a global label cannot have project IDs.
 Restricting a label never removes existing task associations: they can be retained during
 task edits, but cannot be added again after removal unless in scope. Scope is
 included in label responses and exports and can be edited in project settings.
+
+A label may also carry an optional `prompt_template`, editable beside its scope
+under **Settings → Projects**. When a card's session is first dispatched, the
+prompt is composed from the built-in instructions, then the project template,
+then every attached label template in case-insensitive name order. Non-blank
+templates are separated by one blank line; whitespace-only templates are
+skipped. The variables `{{ref}}`, `{{title}}`, `{{project}}` and
+`{{description}}` are rendered once over the combined prompt. Every attached
+label contributes, even if its project scope changed after the card received
+it. Templates never modify an existing session or the prompts used for reply
+retries. Clearing the textarea in the label form clears the template; sending
+`null` clears it through the API and omitting the field keeps it. See
+[the confirmed design](docs/KANSO-30-SPEC.md).
 
 Agent-scoped tokens may read projects, tasks, labels, boards, the inbox and
 `/api/agent/next`; claim and release their own claims; move cards between

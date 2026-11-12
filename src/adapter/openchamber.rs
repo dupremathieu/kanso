@@ -843,19 +843,29 @@ pub fn parse_model(raw: &str) -> Result<Option<ModelSpec>, String> {
 /// An explicit dispatch selection wins over the project setting. The effective
 /// model is split so OpenChamber receives `model` and `variant` separately; a
 /// value without `#` sends no `variant` at all.
-/// The built-in template comes first; project prompt text is appended if present.
+/// The built-in template comes first, followed by the project and then the
+/// attached labels' templates (supplied in name order by the dispatch loader).
 pub fn build_session_create(
     project: &Project,
     task: &Task,
     selection: Option<&DispatchSelection>,
+    label_templates: &[String],
 ) -> Result<Value, String> {
-    let template = project
-        .prompt_template
-        .as_deref()
-        .filter(|template| !template.trim().is_empty())
-        .map(|template| format!("{DEFAULT_PROMPT_TEMPLATE}\n\n{template}"));
+    let mut templates = vec![DEFAULT_PROMPT_TEMPLATE];
+    templates.extend(
+        project
+            .prompt_template
+            .as_deref()
+            .filter(|template| !template.trim().is_empty()),
+    );
+    templates.extend(
+        label_templates
+            .iter()
+            .map(String::as_str)
+            .filter(|template| !template.trim().is_empty()),
+    );
     let prompt = render_prompt(
-        template.as_deref().unwrap_or(DEFAULT_PROMPT_TEMPLATE),
+        &templates.join("\n\n"),
         &PromptValues {
             reference: &task.reference,
             title: &task.title,
@@ -1037,7 +1047,7 @@ mod tests {
 
     #[test]
     fn payload_uses_plan_defaults() {
-        let payload = build_session_create(&project(), &task("Fix the Flux Capacitor"), None)
+        let payload = build_session_create(&project(), &task("Fix the Flux Capacitor"), None, &[])
             .expect("payload");
         assert_eq!(payload["action"], "session.create");
         let input = &payload["input"];
@@ -1073,7 +1083,7 @@ mod tests {
         project.worktree = false;
         project.prompt_template =
             Some("Card {{ref}} — {{title}}\n{{project}}\n{{description}}".into());
-        let payload = build_session_create(&project, &task("Fix it"), None).expect("payload");
+        let payload = build_session_create(&project, &task("Fix it"), None, &[]).expect("payload");
         let input = &payload["input"];
         assert_eq!(input["agent"], "plan");
         assert_eq!(input["model"], "provider/model");
@@ -1098,12 +1108,38 @@ mod tests {
     }
 
     #[test]
+    fn label_templates_follow_project_and_render_once_skipping_blanks() {
+        let mut project = project();
+        project.prompt_template = Some("Project {{project}}".into());
+        let task = task("Fix {{ref}}");
+        let labels = vec![
+            "".into(),
+            " \n\t".into(),
+            "  First {{ref}} {{title}}  ".into(),
+            "Second {{description}} {{unknown}}".into(),
+        ];
+        let payload = build_session_create(&project, &task, None, &labels).expect("payload");
+        let default = build_session_create(&self::project(), &task, None, &[]).expect("payload");
+        assert_eq!(payload["input"]["prompt"], format!("{}\n\nProject Alpha\n\n  First ALP-42 Fix {{{{ref}}}}  \n\nSecond Some details. {{{{unknown}}}}", default["input"]["prompt"].as_str().expect("prompt")));
+        project.prompt_template = Some(" \t".into());
+        let payload = build_session_create(&project, &task, None, &["Label {{ref}}".into()])
+            .expect("payload");
+        assert_eq!(
+            payload["input"]["prompt"],
+            format!(
+                "{}\n\nLabel ALP-42",
+                default["input"]["prompt"].as_str().expect("prompt")
+            )
+        );
+    }
+
+    #[test]
     fn empty_project_settings_fall_back_to_defaults() {
         let mut project = project();
         project.agent = Some("   ".to_owned());
         project.model = Some(String::new());
         project.base_branch = Some(String::new());
-        let payload = build_session_create(&project, &task("Fix it"), None).expect("payload");
+        let payload = build_session_create(&project, &task("Fix it"), None, &[]).expect("payload");
         let input = &payload["input"];
         assert_eq!(input["agent"], "build");
         assert_eq!(input["startRef"], "main");
@@ -1112,7 +1148,7 @@ mod tests {
         for template in ["", "   ", "\n\t"] {
             project.prompt_template = Some(template.to_owned());
             let blank_payload =
-                build_session_create(&project, &task("Fix it"), None).expect("payload");
+                build_session_create(&project, &task("Fix it"), None, &[]).expect("payload");
             assert_eq!(blank_payload["input"]["prompt"], input["prompt"]);
         }
     }
@@ -1169,7 +1205,7 @@ mod tests {
     fn project_model_with_variant_is_split_in_the_payload() {
         let mut project = project();
         project.model = Some("provider/model#max".to_owned());
-        let payload = build_session_create(&project, &task("Fix it"), None).expect("payload");
+        let payload = build_session_create(&project, &task("Fix it"), None, &[]).expect("payload");
         let input = &payload["input"];
         assert_eq!(input["model"], "provider/model");
         assert_eq!(input["variant"], "max");
@@ -1184,8 +1220,8 @@ mod tests {
             model: Some("anthropic/claude#high".to_owned()),
             ..Default::default()
         };
-        let payload =
-            build_session_create(&project, &task("Fix it"), Some(&selection)).expect("payload");
+        let payload = build_session_create(&project, &task("Fix it"), Some(&selection), &[])
+            .expect("payload");
         let input = &payload["input"];
         assert_eq!(input["model"], "anthropic/claude");
         assert_eq!(input["variant"], "high");
@@ -1200,8 +1236,8 @@ mod tests {
             model: Some("other/model".to_owned()),
             ..Default::default()
         };
-        let payload =
-            build_session_create(&project, &task("Fix it"), Some(&selection)).expect("payload");
+        let payload = build_session_create(&project, &task("Fix it"), Some(&selection), &[])
+            .expect("payload");
         let input = &payload["input"];
         assert_eq!(input["model"], "other/model");
         assert!(input.get("variant").is_none());
@@ -1217,7 +1253,7 @@ mod tests {
             ..Default::default()
         };
         let payload =
-            build_session_create(&project, &task("Fix it"), Some(&blank)).expect("payload");
+            build_session_create(&project, &task("Fix it"), Some(&blank), &[]).expect("payload");
         assert_eq!(payload["input"]["agent"], "plan");
 
         let override_agent = DispatchSelection {
@@ -1225,12 +1261,12 @@ mod tests {
             model: None,
             ..Default::default()
         };
-        let payload = build_session_create(&project, &task("Fix it"), Some(&override_agent))
+        let payload = build_session_create(&project, &task("Fix it"), Some(&override_agent), &[])
             .expect("payload");
         assert_eq!(payload["input"]["agent"], "review");
 
         project.agent = Some("  ".to_owned());
-        let payload = build_session_create(&project, &task("Fix it"), None).expect("payload");
+        let payload = build_session_create(&project, &task("Fix it"), None, &[]).expect("payload");
         assert_eq!(payload["input"]["agent"], "build");
     }
 
@@ -1238,7 +1274,7 @@ mod tests {
     fn an_invalid_inherited_or_overridden_model_fails_the_payload() {
         let mut project = project();
         project.model = Some("not-a-model".to_owned());
-        assert!(build_session_create(&project, &task("Fix it"), None).is_err());
+        assert!(build_session_create(&project, &task("Fix it"), None, &[]).is_err());
 
         project.model = None;
         let selection = DispatchSelection {
@@ -1246,7 +1282,7 @@ mod tests {
             model: Some("also-bad".to_owned()),
             ..Default::default()
         };
-        assert!(build_session_create(&project, &task("Fix it"), Some(&selection)).is_err());
+        assert!(build_session_create(&project, &task("Fix it"), Some(&selection), &[]).is_err());
     }
 
     #[test]

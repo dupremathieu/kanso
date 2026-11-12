@@ -2460,6 +2460,152 @@ async fn labels_crud_and_detach() {
 }
 
 #[tokio::test]
+async fn label_prompt_template_create_edit_clear_preserve_and_export() {
+    let app = TestApp::new();
+    let cookie = app.login().await;
+    let project = app.create_project(&cookie, "ALP").await;
+    let project_id = project["id"].as_str().expect("project id");
+    app.create_project(&cookie, "BET").await;
+
+    // A template is optional on create and returned with the label.
+    let created = app
+        .cookie_post(
+            "/api/labels",
+            Some(json!({
+                "name": "prompted",
+                "color": "#123456",
+                "is_global": false,
+                "project_ids": [project_id],
+                "prompt_template": "Use {{ref}} and {{title}}.",
+            })),
+            &cookie,
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{:?}", created.body);
+    assert_eq!(
+        created.body["prompt_template"],
+        "Use {{ref}} and {{title}}."
+    );
+    let id = created.body["id"].as_str().expect("id");
+
+    // Omitting the field stores NULL; blank strings are allowed and kept.
+    let plain = app.create_label(&cookie, "plain", "#654321").await;
+    assert!(plain["prompt_template"].is_null());
+    let blank = app
+        .cookie_post(
+            "/api/labels",
+            Some(json!({"name": "blank", "color": "#abcdef", "prompt_template": ""})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(blank.status, StatusCode::CREATED, "{:?}", blank.body);
+    assert_eq!(blank.body["prompt_template"], "");
+
+    // A PATCH that omits the field is a no-op for the stored template.
+    let renamed = app
+        .cookie_patch(
+            &format!("/api/labels/{id}"),
+            json!({"name": "prompted-renamed"}),
+            &cookie,
+        )
+        .await;
+    assert_eq!(renamed.status, StatusCode::OK, "{:?}", renamed.body);
+    assert_eq!(
+        renamed.body["prompt_template"],
+        "Use {{ref}} and {{title}}."
+    );
+
+    // A present value edits it; there is no additional length cap.
+    let long_template = "x".repeat(5000);
+    let edited = app
+        .cookie_patch(
+            &format!("/api/labels/{id}"),
+            json!({"prompt_template": long_template}),
+            &cookie,
+        )
+        .await;
+    assert_eq!(edited.status, StatusCode::OK, "{:?}", edited.body);
+    assert_eq!(edited.body["prompt_template"], long_template);
+
+    // An explicit null clears it.
+    let cleared = app
+        .cookie_patch(
+            &format!("/api/labels/{id}"),
+            json!({"prompt_template": null}),
+            &cookie,
+        )
+        .await;
+    assert_eq!(cleared.status, StatusCode::OK, "{:?}", cleared.body);
+    assert!(cleared.body["prompt_template"].is_null());
+    let restored = app
+        .cookie_patch(
+            &format!("/api/labels/{id}"),
+            json!({"prompt_template": "exported template"}),
+            &cookie,
+        )
+        .await;
+    assert_eq!(restored.status, StatusCode::OK);
+    assert_eq!(restored.body["prompt_template"], "exported template");
+
+    // The template survives the project filter and the human export.
+    let filtered = app
+        .get("/api/labels?project=ALP", Some(&cookie), None)
+        .await;
+    assert!(filtered
+        .body
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|label| { label["id"] == id && label["prompt_template"] == "exported template" }));
+    let other_filtered = app
+        .get("/api/labels?project=BET", Some(&cookie), None)
+        .await;
+    assert!(!other_filtered
+        .body
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|label| label["id"] == id));
+    let export = app.get("/api/export.json", Some(&cookie), None).await;
+    assert_eq!(export.status, StatusCode::OK);
+    assert!(export.body["labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|label| { label["id"] == id && label["prompt_template"] == "exported template" }));
+
+    // Agent tokens cannot create or edit labels, including their template.
+    let agent = app.create_token(&cookie, "label-agent", "agent").await;
+    let agent_token = agent["token"].as_str().expect("token");
+    let denied_create = app
+        .request(
+            Method::POST,
+            "/api/labels",
+            Some(json!({
+                "name": "agent-owned",
+                "color": "#000000",
+                "prompt_template": "nope",
+            })),
+            None,
+            Some(agent_token),
+            None,
+        )
+        .await;
+    assert_eq!(denied_create.status, StatusCode::FORBIDDEN);
+    let denied_patch = app
+        .request(
+            Method::PATCH,
+            &format!("/api/labels/{id}"),
+            Some(json!({"prompt_template": null})),
+            None,
+            Some(agent_token),
+            None,
+        )
+        .await;
+    assert_eq!(denied_patch.status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn checklist_ordering_and_comment_attribution() {
     let app = TestApp::new();
     let cookie = app.login().await;

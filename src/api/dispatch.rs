@@ -29,7 +29,7 @@ pub struct DispatchBody {
 }
 
 enum Loaded {
-    Found(Box<Project>, Box<Task>),
+    Found(Box<Project>, Box<Task>, Vec<String>),
     NotFound,
 }
 
@@ -101,11 +101,18 @@ pub async fn dispatch(
             let Some(project) = project_by_ref(connection, &task.project_id)? else {
                 return Ok(Loaded::NotFound);
             };
-            Ok(Loaded::Found(Box::new(project), Box::new(task)))
+            // Use attached labels, even if their project scope changed since
+            // attachment. Keep template ordering identical to label lists.
+            let mut statement = connection.prepare(
+                "SELECT l.prompt_template FROM labels l JOIN task_labels tl ON tl.label_id = l.id WHERE tl.task_id = ?1 AND l.prompt_template IS NOT NULL ORDER BY l.name COLLATE NOCASE, l.id",
+            )?;
+            let templates = statement.query_map([&task.id], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(Loaded::Found(Box::new(project), Box::new(task), templates))
         })
         .await?;
-    let (project, task) = match loaded {
-        Loaded::Found(project, task) => (*project, *task),
+    let (project, task, label_templates) = match loaded {
+        Loaded::Found(project, task, templates) => (*project, *task, templates),
         Loaded::NotFound => return Err(ApiError::not_found("task not found")),
     };
 
@@ -143,7 +150,7 @@ pub async fn dispatch(
 
     // Validate the effective model (dispatch override or project default)
     // before reserving the card or calling OpenChamber.
-    let payload = build_session_create(&project, &task, Some(&selection))
+    let payload = build_session_create(&project, &task, Some(&selection), &label_templates)
         .map_err(|message| ApiError::unprocessable(format!("invalid model: {message}")))?;
 
     if !state.reserve_dispatch(&task.id) {
