@@ -2203,7 +2203,7 @@ async fn dispatch_sends_the_exact_payload_stores_the_session_and_enables_auto_ac
                 "directory": "/home/mathieu/code/alpha",
                 "title": "ALP-1 — Fix the flux capacitor",
                 "prompt": format!(
-                    "Card ALP-1: Fix the flux capacitor\nProject Alpha\nDetails\nline 2\nUnknown {{{{nope}}}}\n\n{}",
+                    "{}\n\nCard ALP-1: Fix the flux capacitor\nProject Alpha\nDetails\nline 2\nUnknown {{{{nope}}}}",
                     render_prompt(DEFAULT_PROMPT_TEMPLATE, &PromptValues {
                         reference: "ALP-1",
                         title: "Fix the flux capacitor",
