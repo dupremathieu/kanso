@@ -443,3 +443,28 @@ other board. Omit `KANSO_LABEL_SCREENSHOTS` to skip the captures.
    newly dispatched session uses the new template.
 8. Confirm there is no CLI prompt-template command and no prompt preview in the
    label form. Tab through the dialog, save with Enter and cancel with `Esc`.
+
+## 15. Task title editing (KANSO-41)
+
+The card panel exposes **Edit** next to the title for humans. Saving trims the
+value and PATCHes `{"title": …}` through the existing task update API; an empty
+title is rejected in the panel and never sent. `Enter` saves, `Esc` cancels, and
+an open editor survives live board updates like the description editor.
+`tests/ui.rs` checks the controls and the update call; `tests/api.rs` covers the
+API title validation and PATCH contract.
+
+An optional real-browser check drives the controls against a disposable local
+Kanso instance:
+
+```sh
+cargo build --locked
+PLAYWRIGHT_MODULE=/path/to/tooling/node_modules/playwright/index.mjs \
+KANSO_TITLE_SCREENSHOTS=docs/screenshots/kanso-41 \
+node scripts/test-task-title-ui.mjs
+```
+
+It checks cancel, empty-title rejection, saving with `Enter`, persistence after
+reload and that the description is unchanged, and captures desktop/mobile
+screenshots of the editor. The script uses disposable data under
+`~/.cache/tmp/opencode` and modifies no other board. Omit
+`KANSO_TITLE_SCREENSHOTS` to skip the captures.

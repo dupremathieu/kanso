@@ -151,6 +151,8 @@ export const messages = {
   "panel.description": "Description",
   "panel.descriptionEmpty": "No description yet.",
   "panel.edit": "Edit",
+  "panel.editTitle": "Edit title",
+  "panel.title": "Card title",
   "panel.save": "Save",
   "panel.cancel": "Cancel",
   "panel.status": "Status",
