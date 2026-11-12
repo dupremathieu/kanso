@@ -1486,16 +1486,35 @@ export class Panel {
           })
         );
       }
+      const meta = el("span", { class: "comment-meta" }, [
+        el("time", {
+          class: "muted",
+          datetime: new Date(comment.created_at).toISOString(),
+          title: new Date(comment.created_at).toLocaleString(),
+          text: relativeTime(comment.created_at, t)
+        })
+      ]);
+      if (this.isHuman()) {
+        meta.append(
+          iconButton(t("panel.removeComment"), "trash", {
+            dataset: { focusKey: `comment-${comment.id}-remove` },
+            onClick: () => {
+              if (this.busy) return;
+              this.refreshAfter(
+                api.removeComment(detail.reference, comment.id),
+                t("toast.removed"),
+                null,
+                { taskMissing: false }
+              );
+            }
+          })
+        );
+      }
       list.append(
         el("article", { class: "comment" }, [
           el("header", { class: "comment-header" }, [
             el("span", { class: "comment-byline" }, byline),
-            el("time", {
-              class: "muted",
-              datetime: new Date(comment.created_at).toISOString(),
-              title: new Date(comment.created_at).toLocaleString(),
-              text: relativeTime(comment.created_at, t)
-            })
+            meta
           ]),
           body
         ])

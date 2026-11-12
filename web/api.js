@@ -181,6 +181,9 @@ export const api = {
   comment: (reference, body) =>
     request(`/api/tasks/${enc(reference)}/comment`, { method: "POST", body: { body } }),
 
+  removeComment: (reference, commentId) =>
+    request(`/api/tasks/${enc(reference)}/comment/${enc(commentId)}`, { method: "DELETE" }),
+
   replyTask: (reference, body) =>
     request(`/api/tasks/${enc(reference)}/reply`, { method: "POST", body: { body } }),
 

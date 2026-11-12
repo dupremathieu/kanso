@@ -8,7 +8,7 @@ use serde_json::json;
 
 use super::model::{Comment, COMMENT_COLUMNS};
 use super::tasks::{insert_activity, task_by_ref};
-use super::{now_millis, ApiError, ApiJson, Auth};
+use super::{now_millis, require_human, ApiError, ApiJson, Auth};
 use crate::ids;
 use crate::server::AppState;
 
@@ -95,6 +95,57 @@ pub async fn create(
         json!({ "task_id": task_id, "comment": &comment }),
     );
     Ok((StatusCode::CREATED, Json(comment)).into_response())
+}
+
+pub async fn delete(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path((reference, comment_id)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    require_human(&auth.0)?;
+    let actor = auth.0.actor().to_owned();
+    let deleted = state
+        .db
+        .call(move |connection| {
+            let transaction = connection.transaction()?;
+            let Some(task) = task_by_ref(&transaction, &reference)? else {
+                return Ok(None);
+            };
+            let author: Option<String> = transaction
+                .query_row(
+                    "SELECT author FROM comments WHERE id = ?1 AND task_id = ?2",
+                    params![comment_id, task.id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(author) = author else {
+                return Ok(None);
+            };
+            transaction.execute(
+                "DELETE FROM comments WHERE id = ?1 AND task_id = ?2",
+                params![comment_id, task.id],
+            )?;
+            // The body is intentionally not retained in the activity trail.
+            insert_activity(
+                &transaction,
+                &task.id,
+                &actor,
+                "comment_removed",
+                &json!({ "comment_id": comment_id, "author": author }),
+            )?;
+            transaction.commit()?;
+            Ok(Some((task.id, comment_id)))
+        })
+        .await?;
+    if let Some((task_id, comment_id)) = deleted {
+        state.publish(
+            "comment.deleted",
+            json!({ "task_id": task_id, "comment_id": comment_id }),
+        );
+        Ok(StatusCode::NO_CONTENT.into_response())
+    } else {
+        Err(ApiError::not_found("comment not found"))
+    }
 }
 
 #[cfg(test)]
