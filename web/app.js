@@ -1157,6 +1157,15 @@ async function renderSettingsProjects(token) {
     state.labels = labels;
     if (state.panel) state.panel.setLabels(labels);
     page.append(el("h2", { class: "settings-section-title", text: t("label.title") }));
+    if (human) {
+      page.append(el("div", { class: "page-toolbar" }, [
+        el("button", {
+          type: "button",
+          class: "button button-primary",
+          onClick: () => openLabelForm({ projects, onCreated: () => renderSettingsProjects(token) })
+        }, [icon("plus", { size: 16 }), el("span", { text: t("panel.newLabel") })])
+      ]));
+    }
     const labelList = el("div", { class: "settings-list" });
     for (const label of labels) {
       const scope = label.is_global !== false ? t("label.global") :
