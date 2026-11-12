@@ -487,7 +487,7 @@ fn ordered_column_except(
 
 /// Ordered active cards in one column, sent with `task.moved` so clients can
 /// apply a renumber without refetching the whole board.
-fn column_ranks(
+pub(super) fn column_ranks(
     connection: &rusqlite::Connection,
     project_id: &str,
     status: &str,

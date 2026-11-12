@@ -152,6 +152,21 @@ Verified against OpenChamber 2.6.0. Where §9 assumes a state this version does 
 - The wrapper is stored verbatim in `reply_prompt` and names the reply comment id. Retrying with `POST /api/tasks/:ref/reply/:comment_id` reuses that prompt, the stored session id and directory, making the second send byte-identical; the id lets the agent ignore a duplicate after an `unknown` retry. A reply already `sent` is `409 already_sent`, and an ordinary comment is `409 not_a_reply`. Retry only requires the card to stay active: the card may have left `blocker` in the meantime. The three attempt kinds are `reply_sent`, `reply_failed` and `reply_unknown`, each carrying `comment_id`, `session_id` and, on failure, `error`; retries publish `comment.updated` instead of `comment.created`.
 - The panel keeps the send box after a reply for follow-ups, shows the last delivery result (a "Last reply sent" line, or a failed/unknown banner with **Retry** / **Retry anyway**), and puts the same badge and retry control on the comment itself so it stays reachable after the card leaves `blocker`. A busy session is allowed (the prompt queues); `failed`/`offline` are allowed with a warning. The draft is cleared once the comment exists, even when delivery failed, so pressing send again does not duplicate the text. With no session or a disabled integration the panel explains why and shows no send box.
 
+## Re-call an idle agent (KANSO-40)
+
+- Recall is human-only for active in-progress or in-review cards with an idle
+  linked session and enabled integration. It preserves the session, directory
+  and claim, and does not use dispatch templates or change blocker replies.
+- Migration v12 distinguishes recall comments and stores their exact prompt and
+  target separately from blocker replies. Unknown delivery can be explicitly
+  retried, which may duplicate a prompt. A per-card single-flight reservation
+  remains held by a detached worker if the HTTP client disconnects.
+- A task revision increments on every task update, including poller updates.
+  Confirmed delivery reconciles only against the unchanged snapshot; this
+  conservative choice avoids overwriting even unrelated concurrent edits or ABA
+  changes. If reconciliation is skipped, the response and activity record it,
+  and the UI warns that the card needs inspection.
+
 ## One-time secret handoffs (KANSO-11)
 
 - The confirmed design and acceptance criteria are in `KANSO-11-SPEC.md`.

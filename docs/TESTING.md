@@ -497,3 +497,18 @@ the composer usable for a new comment and survives a reload, and captures
 desktop/mobile screenshots. The script uses disposable data under
 `~/.cache/tmp/opencode` and modifies no other board. Omit
 `KANSO_COMMENT_SCREENSHOTS` to skip the captures.
+
+## 17. Re-call agent (KANSO-40)
+
+`tests/m5.rs` covers human authorization, eligibility, delivery outcomes,
+explicit retries, single-flight behavior and stale card reconciliation.
+`tests/ui.rs` checks the client wiring. An optional browser regression uses
+disposable local data and a mock OpenChamber instance:
+
+```sh
+cargo build --locked
+PLAYWRIGHT_MODULE=/path/to/tooling/node_modules/playwright/index.mjs \
+node scripts/test-recall-ui.mjs
+```
+
+It exercises the instruction form, failed delivery and explicit retry.
