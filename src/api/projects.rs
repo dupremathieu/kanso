@@ -190,7 +190,7 @@ pub async fn create(
             let transaction = connection.transaction()?;
             let exists = transaction
                 .query_row(
-                    "SELECT 1 FROM projects WHERE key = ?1 COLLATE NOCASE",
+                    "SELECT 1 FROM projects WHERE key = ?1 COLLATE NOCASE UNION ALL SELECT 1 FROM task_reference_aliases WHERE project_key = ?1 COLLATE NOCASE LIMIT 1",
                     [&key],
                     |_| Ok(()),
                 )
@@ -286,7 +286,7 @@ pub async fn update(
             if let Some(ref key) = key {
                 let duplicate = transaction
                     .query_row(
-                        "SELECT 1 FROM projects WHERE key = ?1 COLLATE NOCASE AND id <> ?2",
+                        "SELECT 1 FROM projects WHERE key = ?1 COLLATE NOCASE AND id <> ?2 UNION ALL SELECT 1 FROM task_reference_aliases WHERE project_key = ?1 COLLATE NOCASE AND project_id <> ?2 UNION ALL SELECT 1 FROM task_reference_aliases a JOIN tasks t ON t.project_id = ?2 AND t.number = a.number AND t.id IS NOT a.task_id WHERE a.project_key = ?1 COLLATE NOCASE LIMIT 1",
                         params![key, project.id],
                         |_| Ok(()),
                     )

@@ -366,6 +366,20 @@ pub fn task(command: TaskCommand, json_output: bool) -> Result<(), CliError> {
             print_task(&value);
             Ok(())
         }
+        TaskCommand::MoveProject { reference, project } => {
+            let response = client.request(
+                Method::Post,
+                &format!("/api/tasks/{reference}/project"),
+                &[],
+                Some(&json!({"project": project})),
+                None,
+            )?;
+            let Some(value) = finish(response, json_output)? else {
+                return Ok(());
+            };
+            outln!("moved {} to {}", reference, string(&value, "reference"));
+            Ok(())
+        }
         TaskCommand::Add {
             title,
             project,
@@ -781,12 +795,30 @@ pub fn inbox(json_output: bool) -> Result<(), CliError> {
 }
 
 pub fn session(command: SessionCommand, json_output: bool) -> Result<(), CliError> {
+    if let SessionCommand::Unlink { reference } = &command {
+        let client = Client::from_config()?;
+        let response = client.request(
+            Method::Delete,
+            &format!("/api/tasks/{reference}/session"),
+            &[],
+            None,
+            None,
+        )?;
+        let Some(value) = finish(response, json_output)? else {
+            return Ok(());
+        };
+        outln!("unlinked session from {}", string(&value, "reference"));
+        return Ok(());
+    }
     let SessionCommand::Link {
         reference,
         session_id,
         directory,
         status,
-    } = command;
+    } = command
+    else {
+        unreachable!()
+    };
     let client = Client::from_config()?;
     let mut body = Map::new();
     body.insert("session_id".to_owned(), json!(session_id));

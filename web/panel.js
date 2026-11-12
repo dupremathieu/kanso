@@ -178,6 +178,7 @@ export class Panel {
       if (this.reference !== reference) return;
       this.secretLoadFailed = secrets === null;
       this.secretRequests = secrets || [];
+      this.reference = detail.reference;
       this.detail = detail;
       this.render({ resetScroll: true });
     } catch (error) {
@@ -276,6 +277,7 @@ export class Panel {
       if (this.reference !== reference) return;
       this.secretLoadFailed = secrets === null;
       this.secretRequests = secrets || [];
+      this.reference = detail.reference;
       this.detail = detail;
       this.render();
     } catch (error) {
@@ -1518,6 +1520,9 @@ export class Panel {
     if (entry.kind === "moved") {
       vars.from = data.from ? statusLabel(data.from) : "";
       vars.to = data.to ? statusLabel(data.to) : "";
+    } else if (entry.kind === "project_changed") {
+      vars.from = data.from || "";
+      vars.to = data.to || "";
     } else if (entry.kind === "updated") {
       const fields = Array.isArray(data.fields) ? data.fields : [];
       vars.fields = fields
@@ -1570,6 +1575,16 @@ export class Panel {
             : null
         ])
       );
+      if (this.isHuman()) {
+        children.push(el("button", {
+          type: "button", class: "button button-secondary button-small",
+          onClick: async () => {
+            if (await confirmDialog(t("panel.unlinkSessionConfirm"), { title: t("panel.unlinkSession"), confirmLabel: t("panel.unlinkSession") })) {
+              this.run(api.unlinkSession(detail.reference), t("toast.saved"));
+            }
+          }
+        }, [el("span", { text: t("panel.unlinkSession") })]));
+      }
     } else {
       children.push(el("p", { class: "muted", text: t("panel.noSession") }));
     }
@@ -1668,6 +1683,30 @@ export class Panel {
     const actions = [];
     const human = this.isHuman();
     const archived = detail.state === "archived";
+
+    if (human && !detail.claimed_by && !detail.session_id && !detail.session_directory) {
+      const destinations = this.projects.filter((project) => project.id !== detail.project_id && !project.archived_at);
+      if (destinations.length) {
+        const select = el("select", {
+          class: "input",
+          "aria-label": t("panel.moveProject"),
+          onChange: async (event) => {
+            const project = event.target.value;
+            if (!project) return;
+            try {
+              const updated = await api.moveTaskProject(detail.reference, project);
+              if (this.reference !== detail.reference) return;
+              this.reference = updated.reference;
+              this.applyDetail(updated, t("toast.moved"));
+            } catch (error) {
+              toastForError(error, t);
+              event.target.value = "";
+            }
+          }
+        }, [el("option", { value: "", text: t("panel.moveProject") }), ...destinations.map((project) => el("option", { value: project.id, text: `${project.key} — ${project.name}` }))]);
+        actions.push(select);
+      }
+    }
 
     if (human && detail.state === "active") {
       actions.push(

@@ -235,6 +235,12 @@ pub enum ProjectCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum TaskCommand {
+    /// Move a card to another project.
+    MoveProject {
+        reference: String,
+        #[arg(long)]
+        project: String,
+    },
     /// List cards.
     List {
         #[arg(long)]
@@ -278,6 +284,8 @@ pub enum TaskCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum SessionCommand {
+    /// Unlink a session without stopping it.
+    Unlink { reference: String },
     /// Link an existing session id and directory to a card.
     Link {
         reference: String,

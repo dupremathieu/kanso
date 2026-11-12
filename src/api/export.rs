@@ -40,6 +40,15 @@ struct Export {
     labels: Vec<super::labels::ScopedLabel>,
     tasks: Vec<ExportTask>,
     comments: Vec<ExportComment>,
+    task_reference_aliases: Vec<ReferenceAlias>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReferenceAlias {
+    project_key: String,
+    number: i64,
+    project_id: String,
+    task_id: Option<String>,
 }
 
 /// Reuse the task detail loaders (a few small queries per task) instead of
@@ -115,6 +124,20 @@ fn load_export(connection: &mut rusqlite::Connection) -> crate::error::Result<Ex
         comments
     };
 
+    let task_reference_aliases = {
+        let mut statement = connection.prepare("SELECT project_key, number, project_id, task_id FROM task_reference_aliases ORDER BY project_key, number")?;
+        let aliases = statement
+            .query_map([], |row| {
+                Ok(ReferenceAlias {
+                    project_key: row.get(0)?,
+                    number: row.get(1)?,
+                    project_id: row.get(2)?,
+                    task_id: row.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        aliases
+    };
     Ok(Export {
         version: EXPORT_VERSION,
         exported_at: now_millis(),
@@ -122,6 +145,7 @@ fn load_export(connection: &mut rusqlite::Connection) -> crate::error::Result<Ex
         labels,
         tasks: export_tasks,
         comments,
+        task_reference_aliases,
     })
 }
 
