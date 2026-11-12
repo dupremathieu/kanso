@@ -2251,6 +2251,142 @@ async fn task_patch_archive_restore_and_hard_delete_cascade() {
 }
 
 #[tokio::test]
+async fn label_scope_filters_and_preserves_existing_assignments() {
+    let app = TestApp::new();
+    let cookie = app.login().await;
+    let a = app.create_project(&cookie, "AAA").await;
+    let b = app.create_project(&cookie, "BBB").await;
+    let a_id = a["id"].as_str().unwrap();
+    let b_id = b["id"].as_str().unwrap();
+    let global = app.create_label(&cookie, "global", "#123456").await;
+    assert_eq!(global["is_global"], true);
+    let invalid_scope = app
+        .cookie_patch(
+            &format!("/api/labels/{}", global["id"].as_str().unwrap()),
+            json!({"project_ids":[a_id]}),
+            &cookie,
+        )
+        .await;
+    assert_eq!(invalid_scope.status, StatusCode::BAD_REQUEST);
+    let unknown_project = app
+        .get("/api/labels?project=missing", Some(&cookie), None)
+        .await;
+    assert_eq!(unknown_project.status, StatusCode::NOT_FOUND);
+    let invalid_query = app
+        .get("/api/labels?project=AAA&project=BBB", Some(&cookie), None)
+        .await;
+    assert_eq!(invalid_query.status, StatusCode::BAD_REQUEST);
+    assert_eq!(invalid_query.body["error"]["code"], "validation");
+    let invalid_create = app.cookie_post("/api/labels", Some(json!({"name":"invalid", "color":"#abcdef", "is_global":false, "project_ids":["missing"]})), &cookie).await;
+    assert_eq!(invalid_create.status, StatusCode::BAD_REQUEST);
+    let all = app.get("/api/labels", Some(&cookie), None).await;
+    assert_eq!(all.body.as_array().unwrap().len(), 1);
+    let scoped = app.cookie_post("/api/labels", Some(json!({"name":"scoped", "color":"#abcdef", "is_global":false, "project_ids":[a_id]})), &cookie).await;
+    assert_eq!(scoped.status, StatusCode::CREATED);
+    let id = scoped.body["id"].as_str().unwrap();
+    let list = app
+        .get("/api/labels?project=BBB", Some(&cookie), None)
+        .await;
+    assert_eq!(list.body.as_array().unwrap().len(), 1);
+    let list = app
+        .get("/api/labels?project=AAA", Some(&cookie), None)
+        .await;
+    assert_eq!(list.body.as_array().unwrap().len(), 2);
+    let rejected = app
+        .cookie_post(
+            "/api/tasks",
+            Some(json!({"project_id":b_id,"title":"bad","labels":[id]})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(rejected.status, StatusCode::BAD_REQUEST);
+    let task = app
+        .create_task(
+            &cookie,
+            json!({"project_id":a_id,"title":"good","labels":[id]}),
+        )
+        .await;
+    let reference = task["reference"].as_str().unwrap();
+    let changed = app
+        .cookie_patch(
+            &format!("/api/labels/{id}"),
+            json!({"project_ids":[]}),
+            &cookie,
+        )
+        .await;
+    assert_eq!(changed.status, StatusCode::OK);
+    let kept = app
+        .cookie_patch(
+            &format!("/api/tasks/{reference}"),
+            json!({"labels":[id, "global"]}),
+            &cookie,
+        )
+        .await;
+    assert_eq!(kept.status, StatusCode::OK);
+    let removed = app
+        .cookie_patch(
+            &format!("/api/tasks/{reference}"),
+            json!({"labels":[]}),
+            &cookie,
+        )
+        .await;
+    assert_eq!(removed.status, StatusCode::OK);
+    let rejected = app
+        .cookie_patch(
+            &format!("/api/tasks/{reference}"),
+            json!({"labels":[id], "title":"must roll back"}),
+            &cookie,
+        )
+        .await;
+    assert_eq!(rejected.status, StatusCode::BAD_REQUEST);
+    let detail = app
+        .get(&format!("/api/tasks/{reference}"), Some(&cookie), None)
+        .await;
+    assert_eq!(detail.body["title"], "good");
+    let invalid = app
+        .cookie_patch(
+            &format!("/api/labels/{id}"),
+            json!({"name":"changed", "project_ids":["missing"]}),
+            &cookie,
+        )
+        .await;
+    assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+    let list = app.get("/api/labels", Some(&cookie), None).await;
+    assert!(list
+        .body
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|l| l["name"] == "scoped" && l["project_ids"] == json!([])));
+    let shared = app
+        .cookie_patch(
+            &format!("/api/labels/{id}"),
+            json!({"project_ids":[a_id, b_id]}),
+            &cookie,
+        )
+        .await;
+    assert_eq!(shared.status, StatusCode::OK);
+    let list = app
+        .get("/api/labels?project=BBB", Some(&cookie), None)
+        .await;
+    assert_eq!(list.body.as_array().unwrap().len(), 2);
+    let task = app
+        .cookie_post(
+            "/api/tasks",
+            Some(json!({"project_id":b_id,"title":"shared","labels":[id]})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(task.status, StatusCode::CREATED);
+    let export = app.get("/api/export.json", Some(&cookie), None).await;
+    assert!(export.body["labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|label| label["id"] == id && label["project_ids"].as_array().unwrap().len() == 2));
+}
+
+#[tokio::test]
 async fn labels_crud_and_detach() {
     let app = TestApp::new();
     let cookie = app.login().await;

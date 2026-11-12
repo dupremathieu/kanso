@@ -993,7 +993,7 @@ export class Panel {
 
     const actions = [];
     const available = this.labels.filter(
-      (label) => !current.some((item) => item.id === label.id || item.name === label.name)
+      (label) => (label.is_global !== false || (label.project_ids || []).includes(detail.project_id)) && !current.some((item) => item.id === label.id || item.name === label.name)
     );
     if (this.isHuman() && available.length) {
       const add = selectInput(
@@ -1021,9 +1021,14 @@ export class Panel {
             class: "button button-ghost button-small",
             onClick: () => {
               openLabelForm({
+                projects: this.projects,
                 onCreated: (label) => {
                   this.labels.push(label);
                   if (this.options.onLabelsChanged) this.options.onLabelsChanged(this.labels);
+                  if (label.is_global === false && !(label.project_ids || []).includes(detail.project_id)) {
+                    toast(t("label.createdNotApplied"), "success");
+                    return;
+                  }
                   const ids = current.map((item) => item.id);
                   ids.push(label.id);
                   this.run(api.updateTask(detail.reference, { labels: ids }), t("toast.labelAdded"));

@@ -762,8 +762,8 @@ pub async fn create(
             for value in &labels {
                 let found = transaction
                     .query_row(
-                        "SELECT id FROM labels WHERE id = ?1 OR name = ?1 COLLATE NOCASE",
-                        [value],
+                        "SELECT id FROM labels l WHERE (id = ?1 OR name = ?1 COLLATE NOCASE) AND (is_global = 1 OR EXISTS (SELECT 1 FROM label_projects lp WHERE lp.label_id = l.id AND lp.project_id = ?2))",
+                        params![value, project_id],
                         |row| row.get::<_, String>(0),
                     )
                     .optional()?;
@@ -856,9 +856,9 @@ pub async fn create(
             Ok((StatusCode::CREATED, Json(*detail)).into_response())
         }
         CreateOutcome::UnknownProject => Err(ApiError::not_found("project not found")),
-        CreateOutcome::UnknownLabel(label) => {
-            Err(ApiError::validation(format!("unknown label {label:?}")))
-        }
+        CreateOutcome::UnknownLabel(label) => Err(ApiError::validation(format!(
+            "unknown label or unavailable in this project: {label:?}"
+        ))),
     }
 }
 
@@ -965,8 +965,9 @@ pub async fn update(
                     let found = transaction
                         .query_row(
                             "SELECT id, name FROM labels
-                             WHERE id = ?1 OR name = ?1 COLLATE NOCASE",
-                            [value],
+                             WHERE (id = ?1 OR name = ?1 COLLATE NOCASE)
+                             AND (is_global = 1 OR EXISTS (SELECT 1 FROM label_projects lp WHERE lp.label_id = labels.id AND lp.project_id = ?2) OR EXISTS (SELECT 1 FROM task_labels tl WHERE tl.label_id = labels.id AND tl.task_id = ?3))",
+                            params![value, task.project_id, task.id],
                             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
                         )
                         .optional()?;
@@ -1048,9 +1049,9 @@ pub async fn update(
             Ok(Json(*detail))
         }
         UpdateOutcome::NotFound => Err(ApiError::not_found("task not found")),
-        UpdateOutcome::UnknownLabel(label) => {
-            Err(ApiError::validation(format!("unknown label {label:?}")))
-        }
+        UpdateOutcome::UnknownLabel(label) => Err(ApiError::validation(format!(
+            "unknown label or unavailable in this project: {label:?}"
+        ))),
     }
 }
 

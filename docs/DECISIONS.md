@@ -2,6 +2,8 @@
 
 Small choices the plan leaves open, recorded as one line each.
 
+- KANSO-31: migration v8 keeps existing labels global; scoped labels have a set of project IDs, global names remain unique, and changing scope preserves existing task associations. Catalog filtering accepts a project ID or key; adding a label outside its scope is rejected.
+
 - CLI usage errors exit 1 (clap defaults to 2) to match PLAN §6; API/conflict exit codes 2/3 arrive with the CLI in M4.
 - `/api/health` returns HTTP 503 with `{"status":"error","version":"…","db":"error"}` when `PRAGMA quick_check` fails; the plan only defines the healthy shape.
 - The health `quick_check` result is cached for 5 s and refreshed single-flight, so unauthenticated probes cannot saturate the blocking pool.

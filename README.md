@@ -483,7 +483,7 @@ the full reordered `checklist`), and `checklist.deleted` carries `task_id` and
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `GET`/`POST` | `/api/labels` | `{name,color}`; names unique case-insensitively, colour `#rrggbb` |
+| `GET`/`POST` | `/api/labels` | Create with `{name,color,is_global?,project_ids?}`; list all labels or use `?project=ID_OR_KEY` to filter by availability |
 | `PATCH`/`DELETE` | `/api/labels/:id` | Deleting detaches the label from cards |
 | `POST` | `/api/tasks/:ref/comment` | `{body}`; author is `ui`, the token name, or `X-Kanso-Agent` for an agent token |
 | `POST` | `/api/tasks/:ref/checklist` | `{text}` |
@@ -493,6 +493,15 @@ the full reordered `checklist`), and `checklist.deleted` carries `task_id` and
 | `DELETE` | `/api/tokens/:id` | Revoke; repeating it is idempotent |
 | `GET` | `/api/export.json` | Human only; versioned dump of projects, labels, all cards (with checklists and dependencies) and comments; downloadable attachment with `Cache-Control: no-store` |
 | `POST` | `/api/backup` | Human only; `VACUUM INTO` under `<data_dir>/backups/`; body `{dir?}` resolves under the data directory |
+
+Label names are unique case-insensitively and colors use `#rrggbb`. Labels are
+global by default; set `is_global` to `false` and supply `project_ids` to limit
+their availability (an empty list means no projects). PATCH accepts either field
+to change the scope. Projects are identified by ID in `project_ids`. Restricting
+a label requires `is_global: false`; a global label cannot have project IDs.
+Restricting a label never removes existing task associations: they can be retained during
+task edits, but cannot be added again after removal unless in scope. Scope is
+included in label responses and exports and can be edited in project settings.
 
 Agent-scoped tokens may read projects, tasks, labels, boards, the inbox and
 `/api/agent/next`; claim and release their own claims; move cards between

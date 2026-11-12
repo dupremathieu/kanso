@@ -5,7 +5,7 @@ use axum::Json;
 use serde::Serialize;
 
 use super::model::{
-    ChecklistItem, Comment, Dependencies, Label, Project, Task, PROJECT_COLUMNS, TASK_COLUMNS,
+    ChecklistItem, Comment, Dependencies, Project, Task, PROJECT_COLUMNS, TASK_COLUMNS,
 };
 use super::tasks::{load_checklist, load_dependencies, load_labels, load_provenance};
 use super::{now_millis, require_human, ApiError, Auth};
@@ -37,7 +37,7 @@ struct Export {
     version: u32,
     exported_at: i64,
     projects: Vec<Project>,
-    labels: Vec<Label>,
+    labels: Vec<super::labels::ScopedLabel>,
     tasks: Vec<ExportTask>,
     comments: Vec<ExportComment>,
 }
@@ -56,18 +56,17 @@ fn load_export(connection: &mut rusqlite::Connection) -> crate::error::Result<Ex
     };
 
     let labels = {
-        let mut statement = connection
-            .prepare("SELECT id, name, color FROM labels ORDER BY name COLLATE NOCASE, id")?;
-        let labels = statement
-            .query_map([], |row| {
-                Ok(Label {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    color: row.get(2)?,
-                })
-            })?
+        let mut statement =
+            connection.prepare("SELECT id FROM labels ORDER BY name COLLATE NOCASE, id")?;
+        let ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        labels
+        ids.iter()
+            .map(|id| {
+                super::labels::label_by_id(connection, id)
+                    .map(|label| label.expect("listed label exists"))
+            })
+            .collect::<crate::error::Result<Vec<_>>>()?
     };
 
     let tasks = {

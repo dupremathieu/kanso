@@ -19,6 +19,7 @@ import { githubSettings } from "./github-settings.js?v={{VERSION}}";
 import {
   openCardForm,
   openProjectForm,
+  openLabelForm,
   openTokenForm,
   openMoveMenu,
   confirmDialog,
@@ -1151,6 +1152,23 @@ async function renderSettingsProjects(token) {
       for (const project of archived) list.append(renderProjectRow(project, true, human, refresh));
       page.append(list);
     }
+    const labels = await api.labels();
+    if (state.routeToken !== token) return;
+    state.labels = labels;
+    if (state.panel) state.panel.setLabels(labels);
+    page.append(el("h2", { class: "settings-section-title", text: t("label.title") }));
+    const labelList = el("div", { class: "settings-list" });
+    for (const label of labels) {
+      const scope = label.is_global !== false ? t("label.global") :
+        (label.project_ids || []).map((id) => projects.find((project) => project.id === id)?.key || id).join(", ") || t("label.noProjects");
+      const children = [el("div", { class: "settings-row-main" }, [
+        el("span", { class: "label-chip", style: { "--label-color": label.color }, text: label.name }),
+        el("span", { class: "muted", text: scope })
+      ])];
+      if (human) children.push(el("button", { type: "button", class: "button button-secondary button-small", text: t("settings.edit"), onClick: () => openLabelForm({ label, projects, onCreated: () => renderSettingsProjects(token) }) }));
+      labelList.append(el("article", { class: "settings-row" }, children));
+    }
+    page.append(labelList);
     state.dom.pageRegion.replaceChildren(page);
   } catch (error) {
     if (state.routeToken !== token) return;
