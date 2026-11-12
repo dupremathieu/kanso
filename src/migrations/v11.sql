@@ -1,0 +1,5 @@
+CREATE TABLE model_presets (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    model TEXT NOT NULL
+);

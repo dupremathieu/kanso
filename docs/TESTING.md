@@ -205,6 +205,11 @@ On one card, verify in order:
 5. Agent identities in the UI would not see project/token/inbox admin controls;
    the API still enforces this, but the browser login is always the human UI
    session. Check with a bearer token only through the API if needed.
+6. On an isolated test instance, open **Settings → Models** and create, edit,
+   and delete presets; duplicate titles ignoring case must fail. Select a preset
+   in project and dispatch model fields, verify free text still works, and check
+   that changing or deleting a preset does not change a previously copied value.
+   Verify an agent can run `kanso models list --json` but cannot mutate presets.
 
 ## 9. Markdown safety
 

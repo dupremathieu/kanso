@@ -324,6 +324,7 @@ async fn deep_links_serve_the_shell() {
         "/inbox",
         "/imports",
         "/settings/projects",
+        "/settings/models",
         "/settings/tokens",
         "/settings/integration",
         "/settings/export",

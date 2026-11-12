@@ -212,6 +212,27 @@ fn api_post(server: &TestServer, token: &str, path: &str, body: Value) -> Value 
     serde_json::from_str(&text).expect("api JSON")
 }
 
+#[test]
+fn models_list_supports_agent_plain_and_json_output() {
+    let server = TestServer::start();
+    let human = server.create_token("model-human", "human");
+    let agent = server.create_token("model-agent", "agent");
+    api_post(
+        &server,
+        &human,
+        "/api/models",
+        json!({"title":"explorer", "model":"provider/model#fast"}),
+    );
+    let plain = command(&server, Some(&agent), &["models", "list"]);
+    assert!(plain.status.success());
+    assert!(String::from_utf8_lossy(&plain.stdout).contains("explorer  provider/model#fast"));
+    let json_output = command(&server, Some(&agent), &["models", "list", "--json"]);
+    assert!(json_output.status.success());
+    let value: Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    assert_eq!(value[0]["title"], "explorer");
+    assert_eq!(value[0]["model"], "provider/model#fast");
+}
+
 fn assert_broken_pipe_exits_zero(server: &TestServer, token: &str, args: &[&str]) {
     let mut child = kanso_command(server, Some(token), args)
         .stdout(Stdio::piped())

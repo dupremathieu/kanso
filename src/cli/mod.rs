@@ -23,6 +23,11 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// List configured model presets (read-only).
+    Models {
+        #[command(subcommand)]
+        command: ModelsCommand,
+    },
     /// Request and use a one-time secret handoff.
     Secret {
         #[command(subcommand)]
@@ -158,6 +163,12 @@ pub enum Command {
         #[arg(long)]
         out: Option<String>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ModelsCommand {
+    /// List model presets.
+    List,
 }
 
 #[derive(Debug, Subcommand)]
@@ -417,6 +428,9 @@ pub fn run(cli: Cli) -> Result<(), CliError> {
         Command::Secret { command } => secret::run(command, json),
         Command::Serve { port, data_dir } => serve::run(port, data_dir),
         Command::Config { command } => commands::config(command, json),
+        Command::Models {
+            command: ModelsCommand::List,
+        } => commands::models(json),
         Command::Project { command } => commands::project(command, json),
         Command::Task { command } => commands::task(command, json),
         Command::Next {

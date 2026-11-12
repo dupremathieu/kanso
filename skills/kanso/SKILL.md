@@ -33,6 +33,10 @@ given: never create another worktree, change directory, or touch another card.
 
 ## Rules
 
+- Before creating a session or spawning a subagent, when no explicit model-selection
+  rule applies, consult `kanso models list` (or `--json`). Titles are hints, not
+  an automatic routing policy; `default` has no special fallback meaning. If the
+  list is empty, use the normal model selection behavior.
 - In a session dispatched from Kanso, check the card's `labels:` line. If it
   has no label named `need_spec`, do not ask questions in chat or card comments;
   work from the existing specification. If unable to proceed safely, use the

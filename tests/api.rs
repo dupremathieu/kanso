@@ -229,6 +229,136 @@ async fn project_moves_reject_agents_claimed_tasks_and_archived_projects() {
 }
 
 #[tokio::test]
+async fn model_presets_are_human_managed_and_agent_readable() {
+    let app = TestApp::new();
+    let cookie = app.login().await;
+    let agent = app.create_token(&cookie, "models-agent", "agent").await;
+    let token = agent["token"].as_str();
+    assert_eq!(app.get("/api/models", None, token).await.body, json!([]));
+    let body = json!({"title":"default", "model":"openai/example#high"});
+    assert_eq!(
+        app.request(
+            Method::POST,
+            "/api/models",
+            Some(body.clone()),
+            None,
+            token,
+            None
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    let created = app.cookie_post("/api/models", Some(body), &cookie).await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    let id = created.body["id"].as_str().unwrap();
+    let path = format!("/api/models/{id}");
+    let second = app
+        .cookie_post(
+            "/api/models",
+            Some(json!({"title":"other", "model":"openai/other"})),
+            &cookie,
+        )
+        .await;
+    let second_path = format!("/api/models/{}", second.body["id"].as_str().unwrap());
+    assert_eq!(
+        app.request(
+            Method::PUT,
+            &second_path,
+            Some(json!({"title":"DEFAULT", "model":"openai/other"})),
+            Some(&cookie),
+            None,
+            Some(ORIGIN)
+        )
+        .await
+        .status,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        app.request(
+            Method::PUT,
+            "/api/models/missing",
+            Some(json!({"title":"default", "model":"openai/other"})),
+            Some(&cookie),
+            None,
+            Some(ORIGIN)
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.cookie_delete(&second_path, &cookie).await.status,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.cookie_post(
+            "/api/models",
+            Some(json!({"title":"DEFAULT", "model":"openai/example"})),
+            &cookie
+        )
+        .await
+        .status,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        app.cookie_post(
+            "/api/models",
+            Some(json!({"title":"bad", "model":"invalid"})),
+            &cookie
+        )
+        .await
+        .status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        app.get("/api/models", None, token).await.body[0]["model"],
+        "openai/example#high"
+    );
+    assert_eq!(
+        app.get("/api/export.json", Some(&cookie), None).await.body["model_presets"][0]["title"],
+        "default"
+    );
+    assert_eq!(
+        app.request(
+            Method::PUT,
+            &path,
+            Some(json!({"title":"updated", "model":"openai/other"})),
+            None,
+            token,
+            None
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.request(
+            Method::PUT,
+            &path,
+            Some(json!({"title":"updated", "model":"openai/other"})),
+            Some(&cookie),
+            None,
+            Some(ORIGIN)
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.request(Method::DELETE, &path, None, None, token, None)
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.cookie_delete(&path, &cookie).await.status,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(app.get("/api/models", None, token).await.body, json!([]));
+}
+
+#[tokio::test]
 async fn github_auth_requires_a_human_session_csrf_and_no_store() {
     let app = TestApp::new();
     let cookie = app.login().await;

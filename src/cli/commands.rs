@@ -186,6 +186,18 @@ pub fn config(command: ConfigCommand, _json_output: bool) -> Result<(), CliError
     }
 }
 
+pub fn models(json_output: bool) -> Result<(), CliError> {
+    let client = Client::from_config()?;
+    if let Some(value) = finish(client.get("/api/models")?, json_output)? {
+        if let Some(items) = value.as_array() {
+            for item in items {
+                outln!("{}  {}", string(item, "title"), string(item, "model"));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn project(command: ProjectCommand, json_output: bool) -> Result<(), CliError> {
     let client = Client::from_config()?;
     match command {

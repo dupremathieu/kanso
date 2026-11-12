@@ -144,6 +144,21 @@ export function confirmDialog(message, { title = "", confirmLabel = t("common.de
   });
 }
 
+function modelPresetPicker(input) {
+  const select = el("select", { class: "input", "aria-label": t("models.choose") });
+  select.append(el("option", { value: "", text: t("models.choose") }));
+  select.hidden = true;
+  select.addEventListener("change", () => {
+    if (select.value) input.value = select.value;
+    select.value = "";
+  });
+  api.models().then((presets) => {
+    for (const preset of presets) select.append(el("option", { value: preset.model, text: `${preset.title} — ${preset.model}` }));
+    select.hidden = !presets.length;
+  }).catch(() => {});
+  return select;
+}
+
 export function openDispatchDialog({ reference, agent = "", model = "", worktree = true, onSubmit }) {
   const agentInput = el("input", {
     class: "input",
@@ -175,6 +190,7 @@ export function openDispatchDialog({ reference, agent = "", model = "", worktree
     el("p", { class: "modal-message", text: t("panel.dispatchNote", { ref: reference }) }),
     field(t("panel.dispatchAgent"), agentInput, t("panel.dispatchAgentHint")),
     field(t("panel.dispatchModel"), modelInput, t("panel.dispatchModelHint")),
+    modelPresetPicker(modelInput),
     field(t("form.worktree"), worktreeInput, t("panel.dispatchWorktreeHint")),
     error,
     el("div", { class: "form-actions" }, [cancel, submit])
@@ -444,6 +460,7 @@ export function openProjectForm({ project = null, onSaved }) {
         field(t("form.agent"), agent),
         field(t("form.model"), model, t("form.modelHint"))
       ]),
+      modelPresetPicker(model),
       el("div", { class: "form-row" }, [
         field(t("form.baseBranch"), baseBranch),
         field(t("form.worktree"), worktree)

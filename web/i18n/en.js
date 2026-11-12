@@ -5,6 +5,13 @@
 // file in `web/i18n/index.js`. Nothing else in the UI contains English text.
 
 export const messages = {
+  "models.title": "Models",
+  "models.description": "Manage reusable model presets. Choosing one copies its value; later changes do not affect existing selections.",
+  "models.choose": "Choose a model preset (optional)",
+  "models.presetTitle": "Preset title",
+  "models.edit": "Edit",
+  "models.confirmDelete": "Delete this model preset? Existing selections will not change.",
+  "models.deleteTitle": "Delete model preset",
   "imports.title": "Imports",
   "imports.loading": "Loading import providers…",
   "imports.unavailable": "Provider support is not yet available. No external tasks can be imported yet.",
