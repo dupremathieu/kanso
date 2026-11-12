@@ -66,6 +66,7 @@ export class Panel {
     this.detail = null;
     this.reference = null;
     this.busy = false;
+    this.editingTitle = false;
     this.editingDescription = false;
     this.editingItem = null;
     this.sessionLinkOpen = false;
@@ -117,7 +118,7 @@ export class Panel {
       this.root.contains(active) &&
       ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName);
     return Boolean(
-      this.busy || this.editingDescription || this.editingItem || typingInPanel
+      this.busy || this.editingTitle || this.editingDescription || this.editingItem || typingInPanel
     );
   }
 
@@ -164,6 +165,7 @@ export class Panel {
     this.reference = reference;
     this.detail = null;
     this.secretRequests = [];
+    this.editingTitle = false;
     this.editingDescription = false;
     this.editingItem = null;
     this.sessionLinkOpen = false;
@@ -196,6 +198,7 @@ export class Panel {
     this.reference = null;
     this.detail = null;
     this.secretRequests = [];
+    this.editingTitle = false;
     this.editingDescription = false;
     this.editingItem = null;
     this.sessionLinkOpen = false;
@@ -295,14 +298,58 @@ export class Panel {
     const descriptionDraft = this.editingDescription
       ? this.root.querySelector("textarea[data-description-editor]")?.value
       : null;
+    const titleDraft = this.editingTitle
+      ? this.root.querySelector("input[data-title-editor]")?.value
+      : null;
     const itemDraft = this.editingItem
       ? this.root.querySelector("input.checklist-edit")?.value
       : null;
     this.detail = detail;
     this.clearPendingReload();
-    this.render({ descriptionDraft, itemDraft });
+    this.render({ descriptionDraft, titleDraft, itemDraft });
     if (this.options.onChanged) this.options.onChanged(detail);
     if (message) toast(message, "success");
+  }
+
+  async saveTitle(detail, value) {
+    if (this.busy) return;
+    const title = value.trim();
+    if (!title) {
+      toast(t("form.titleRequired"), "warning");
+      return;
+    }
+    if (title === detail.title) {
+      this.editingTitle = false;
+      this.render();
+      this.focusTitleEdit();
+      this.drafts.delete("title");
+      return;
+    }
+    const reference = this.reference;
+    this.busy = true;
+    try {
+      const updated = await api.updateTask(detail.reference, { title });
+      if (this.reference !== reference) return;
+      this.editingTitle = false;
+      this.applyDetail(updated, t("toast.saved"));
+      this.focusTitleEdit();
+      this.drafts.delete("title");
+    } catch (error) {
+      if (this.reference !== reference) return;
+      if (error.status === 404) {
+        this.reload({ force: true });
+      } else {
+        toastForError(error, t);
+        this.render({ titleDraft: value });
+      }
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  focusTitleEdit() {
+    const button = this.root.querySelector("[data-focus-key='title-edit']");
+    if (button) button.focus();
   }
 
   async saveDescription(detail, value) {
@@ -601,7 +648,7 @@ export class Panel {
     return handle;
   }
 
-  render({ resetScroll = false, descriptionDraft = null, itemDraft = null } = {}) {
+  render({ resetScroll = false, titleDraft = null, descriptionDraft = null, itemDraft = null } = {}) {
     const previousScroll = resetScroll ? 0 : this.scrollEl ? this.scrollEl.scrollTop : 0;
     if (resetScroll) this.lastRenderedReference = this.reference;
     const active = document.activeElement;
@@ -631,7 +678,7 @@ export class Panel {
 
     const detail = this.detail;
     const body = el("div", { class: "panel-body" }, [
-      this.renderSummary(detail),
+      this.renderSummary(detail, titleDraft),
       this.renderSecrets(detail),
       this.renderAgentQuestion(detail),
       detail.provenance ? this.section(t("imports.provenance"), [
@@ -692,7 +739,7 @@ export class Panel {
   // -------------------------------------------------------------------------
   // Sections
 
-  renderSummary(detail) {
+  renderSummary(detail, titleDraft = null) {
     const agentStatuses = ["todo", "in_progress", "in_review", "blocker"];
     const statusValues = this.isHuman()
       ? STATUSES
@@ -776,14 +823,86 @@ export class Panel {
     }
 
     const claim = this.renderClaim(detail);
+    const title = this.renderTitle(detail, titleDraft);
 
     return el("section", { class: "panel-section panel-summary" }, [
-      el("h2", { class: "panel-title", text: detail.title }),
+      title,
       badges,
       meta,
       this.renderLabels(detail),
       claim
     ]);
+  }
+
+  renderTitle(detail, draft = null) {
+    if (!this.editingTitle) {
+      return el("div", { class: "panel-title-row" }, [
+        el("h2", { class: "panel-title", text: detail.title }),
+        this.isHuman()
+          ? el(
+              "button",
+              {
+                type: "button",
+                class: "button button-ghost button-small panel-title-edit-button",
+                "aria-label": t("panel.editTitle"),
+                dataset: { focusKey: "title-edit" },
+                onClick: () => {
+                  this.editingTitle = true;
+                  this.render();
+                }
+              },
+              [el("span", { text: t("panel.edit") })]
+            )
+          : null
+      ]);
+    }
+
+    const input = el("input", {
+      class: "input",
+      type: "text",
+      value: draft !== null ? draft : detail.title,
+      maxlength: "200",
+      "data-title-editor": "true",
+      "data-draft": "title",
+      "data-autofocus": "true",
+      "aria-label": t("panel.title"),
+      dataset: { focusKey: "title-input" }
+    });
+    const save = el("button", {
+      type: "button",
+      class: "button button-primary button-small",
+      text: t("panel.save")
+    });
+    const cancel = el("button", {
+      type: "button",
+      class: "button button-secondary button-small",
+      text: t("panel.cancel")
+    });
+    const close = () => {
+      this.editingTitle = false;
+      this.render();
+      this.focusTitleEdit();
+      this.drafts.delete("title");
+    };
+    save.addEventListener("click", () => {
+      this.saveTitle(detail, input.value);
+    });
+    cancel.addEventListener("click", close);
+    const row = el("div", { class: "panel-title-edit" }, [
+      input,
+      el("div", { class: "form-actions" }, [cancel, save])
+    ]);
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && event.target !== save && event.target !== cancel) {
+        event.preventDefault();
+        save.click();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+      }
+    });
+    return row;
   }
 
   renderAgentQuestion(detail) {

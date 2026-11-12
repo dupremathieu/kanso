@@ -58,6 +58,37 @@ fn github_device_screen_does_not_use_persistent_browser_storage() {
 }
 
 #[test]
+fn task_title_editor_is_human_only_and_saves_the_title() {
+    let panel = std::fs::read_to_string(repository_web_dir().join("panel.js")).unwrap();
+    let section = panel
+        .split("  renderTitle(detail, draft = null) {")
+        .nth(1)
+        .unwrap()
+        .split("  renderAgentQuestion(detail) {")
+        .next()
+        .unwrap();
+    assert!(section.contains("data-title-editor"));
+    assert!(section.contains("maxlength: \"200\""));
+    assert!(section.contains("this.isHuman()"));
+    assert!(section.contains("t(\"panel.editTitle\")"));
+    let save = panel
+        .split("  async saveTitle(detail, value) {")
+        .nth(1)
+        .unwrap()
+        .split("  async saveDescription(detail, value) {")
+        .next()
+        .unwrap();
+    assert!(save.contains("api.updateTask(detail.reference, { title })"));
+    assert!(save.contains("value.trim()"));
+    assert!(save.contains("t(\"form.titleRequired\")"));
+    assert!(save.contains("this.drafts.delete(\"title\")"));
+    assert!(save.contains("if (this.busy) return;"));
+    assert!(panel.contains("this.editingTitle || this.editingDescription"));
+    assert!(panel.matches("this.editingTitle = false;").count() >= 3);
+    assert!(panel.contains("focusTitleEdit()"));
+}
+
+#[test]
 fn secret_input_is_separate_from_drafts_and_refreshes_on_secret_events() {
     let panel = std::fs::read_to_string(repository_web_dir().join("panel.js")).unwrap();
     let section = panel

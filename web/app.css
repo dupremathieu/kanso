@@ -929,6 +929,38 @@ body.resizing-panel * {
   overflow-wrap: anywhere;
 }
 
+.panel-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.panel-title-row .panel-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.panel-title-row .button {
+  flex: none;
+}
+
+.panel-title-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.panel-title-edit .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.panel-title-edit .form-actions {
+  flex: none;
+  margin: 0;
+}
+
 .panel-badges {
   display: flex;
   flex-wrap: wrap;
