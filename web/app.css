@@ -1521,6 +1521,13 @@ body.resizing-panel * {
   min-width: 0;
 }
 
+.label-settings-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .imports-page .field {
   max-width: 560px;
   margin-bottom: 12px;

@@ -383,3 +383,58 @@ Setup: OpenChamber is enabled, the card has a linked session (dispatch or
    explicitly mentions a possible duplicate.
 2. Retry once the service is reachable: the stored prompt is resent unchanged
    (the reply comment id in the prompt lets the agent deduplicate it).
+
+## 14. Label prompt templates (KANSO-30)
+
+Automated coverage: label create/update/clear/keep semantics are exercised in
+`tests/api.rs`, and adapter unit tests cover default → project → label ordering,
+blank skipping and one-pass variable rendering. `tests/m5.rs` exercises the
+dispatch loader’s case-insensitive label-name ordering and attached labels
+whose scope has changed.
+`tests/ui.rs` continues to validate every shell module and translation file.
+
+An optional real-browser check drives the label dialog against a disposable
+local Kanso instance. Build first, install Playwright in your external test
+tooling, then run:
+
+```sh
+cargo build --locked
+PLAYWRIGHT_MODULE=/path/to/tooling/node_modules/playwright/index.mjs \
+KANSO_LABEL_SCREENSHOTS=docs/screenshots/kanso-30 \
+node scripts/test-label-templates-ui.mjs
+```
+
+It checks loading an existing template, saving, clearing and persistence, and
+captures the desktop/mobile screenshots linked from `KANSO-30-SPEC.md`. The
+script uses disposable data under `~/.cache/tmp/opencode` and modifies no
+other board. Omit `KANSO_LABEL_SCREENSHOTS` to skip the captures.
+
+1. Create a label from a card’s **New label** action with a template such as
+   `Focus on tests for {{ref}} — {{title}} in {{project}}.` Save it and reopen
+   **Settings → Projects → Edit**: the textarea contains the saved text. Confirm the label row shows
+   **Prompt template set**.
+2. Edit the label again, clear the textarea and save. Reload the page: the text
+   stays empty and the badge is gone. Re-enter a template for the next steps.
+3. Check the API contract with a human token: create a label with
+   `prompt_template`, PATCH without the field and confirm the template is
+   unchanged, then PATCH `{"prompt_template": null}` and confirm it is cleared.
+   A whitespace-only value is treated as no prompt during composition.
+4. Attach several templated labels to an active card in an order that differs
+   from their names. Dispatch the card against a disposable/mock OpenChamber
+   and inspect the captured `input.prompt`: built-in prompt, project prompt,
+   then every label template in case-insensitive name order, one blank line
+   between non-blank sections. A blank template is skipped.
+5. Use mixed-case label names (for example `alpha` and `Zulu`) to check
+   case-insensitive ordering. Case-insensitive duplicate names are rejected;
+   the SQL id tie-breaker is defensive, not reproducible through the API.
+   Use values containing `{{ref}}` in a title or description and confirm the
+   inserted text is not expanded a second time.
+6. Restrict a templated label to a different project after attaching it to a
+   fresh active card. Dispatch it: the attached label still contributes its
+   template. Stop the session before redispatching, or use another fresh card,
+   to verify removing the label excludes its template on the next dispatch.
+7. Keep a session open, then change a label template and send a blocker reply.
+   The existing session and the reply/retry prompt must be unchanged; only a
+   newly dispatched session uses the new template.
+8. Confirm there is no CLI prompt-template command and no prompt preview in the
+   label form. Tab through the dialog, save with Enter and cancel with `Esc`.

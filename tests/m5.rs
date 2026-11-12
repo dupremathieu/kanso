@@ -2149,6 +2149,76 @@ async fn dispatch_rejects_a_card_that_is_already_running() {
 }
 
 #[tokio::test]
+async fn dispatch_appends_only_attached_label_templates_in_name_order() {
+    let (url, mock) = start_mock().await;
+    let app = TestApp::new(Some(&url)).await;
+    let cookie = app.login().await;
+    let project = app.create_project(&cookie, "ALP", "Alpha").await;
+    let project_id = project["id"].as_str().expect("id");
+    app.patch(
+        &format!("/api/projects/{project_id}"),
+        json!({"repo_path":"/code/alpha", "prompt_template":"Project {{project}}"}),
+        &cookie,
+    )
+    .await;
+    let mut ids = Vec::new();
+    for (name, template, attached) in [
+        ("Zulu", Some("Last {{ref}}"), true),
+        ("alpha", Some("First {{title}} {{unknown}}"), true),
+        ("Blank", Some(" \n\t"), true),
+        ("None", None, true),
+        ("Unused", Some("Must not appear"), false),
+    ] {
+        let response = app
+            .post(
+                "/api/labels",
+                Some(json!({"name":name,"color":"#abcdef","prompt_template":template})),
+                &cookie,
+            )
+            .await;
+        assert_eq!(response.status, StatusCode::CREATED, "{:?}", response.body);
+        if attached {
+            ids.push(response.body["id"].as_str().expect("id").to_owned());
+        }
+    }
+    let card = app.create_card(&cookie, project_id, "Fix {{ref}}").await;
+    let reference = card["reference"].as_str().expect("ref");
+    let response = app
+        .patch(
+            &format!("/api/tasks/{reference}"),
+            json!({"labels":ids}),
+            &cookie,
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::OK, "{:?}", response.body);
+    // A scope change does not detach a label or suppress its template.
+    let response = app
+        .patch(
+            &format!("/api/labels/{}", ids[1]),
+            json!({"is_global":false,"project_ids":[]}),
+            &cookie,
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::OK);
+    let response = app
+        .post(&format!("/api/tasks/{reference}/dispatch"), None, &cookie)
+        .await;
+    assert_eq!(response.status, StatusCode::OK, "{:?}", response.body);
+    let requests = mock.create_requests();
+    assert_eq!(requests.len(), 1);
+    let expected = render_prompt(
+        DEFAULT_PROMPT_TEMPLATE,
+        &PromptValues {
+            reference,
+            title: "Fix {{ref}}",
+            project: "Alpha",
+            description: "Details\nline 2",
+        },
+    );
+    assert_eq!(requests[0].body["input"]["prompt"], format!("{expected}\n\nProject Alpha\n\nFirst Fix {{{{ref}}}} {{{{unknown}}}}\n\nLast {reference}"));
+}
+
+#[tokio::test]
 async fn dispatch_sends_the_exact_payload_stores_the_session_and_enables_auto_accept() {
     let (url, mock) = start_mock().await;
     let app = TestApp::new(Some(&url)).await;

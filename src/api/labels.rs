@@ -8,7 +8,9 @@ use serde_json::json;
 
 use super::model::Label;
 use super::tasks::insert_activity;
-use super::{require_human, validate_color, ApiError, ApiJson, ApiQuery, Auth};
+use super::{
+    deserialize_present, require_human, validate_color, ApiError, ApiJson, ApiQuery, Auth,
+};
 use crate::ids;
 use crate::server::AppState;
 
@@ -19,6 +21,8 @@ pub struct CreateLabel {
     color: String,
     is_global: Option<bool>,
     project_ids: Option<Vec<String>>,
+    #[serde(default)]
+    prompt_template: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -28,6 +32,8 @@ pub struct UpdateLabel {
     color: Option<String>,
     is_global: Option<bool>,
     project_ids: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    prompt_template: Option<Option<String>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -36,6 +42,7 @@ pub struct ScopedLabel {
     label: Label,
     is_global: bool,
     project_ids: Vec<String>,
+    prompt_template: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -93,7 +100,7 @@ pub(super) fn label_by_id(
 ) -> crate::error::Result<Option<ScopedLabel>> {
     let label = connection
         .query_row(
-            "SELECT id, name, color, is_global FROM labels WHERE id = ?1",
+            "SELECT id, name, color, is_global, prompt_template FROM labels WHERE id = ?1",
             [id],
             |row| {
                 Ok((
@@ -103,11 +110,12 @@ pub(super) fn label_by_id(
                         color: row.get(2)?,
                     },
                     row.get::<_, bool>(3)?,
+                    row.get::<_, Option<String>>(4)?,
                 ))
             },
         )
         .optional()?;
-    let Some((label, is_global)) = label else {
+    let Some((label, is_global, prompt_template)) = label else {
         return Ok(None);
     };
     let mut statement = connection
@@ -119,6 +127,7 @@ pub(super) fn label_by_id(
         label,
         is_global,
         project_ids,
+        prompt_template,
     }))
 }
 
@@ -157,6 +166,7 @@ pub async fn create(
     let color = validate_color(&payload.color)?;
     let global = payload.is_global.unwrap_or(true);
     let projects = payload.project_ids.unwrap_or_default();
+    let prompt_template = payload.prompt_template;
     if global && !projects.is_empty() {
         return Err(ApiError::validation(
             "global labels cannot specify projects",
@@ -180,8 +190,9 @@ pub async fn create(
                 return Ok(None);
             }
             transaction.execute(
-                "INSERT INTO labels (id, name, color) VALUES (?1, ?2, ?3)",
-                params![id, name, color],
+                "INSERT INTO labels (id, name, color, prompt_template)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![id, name, color, prompt_template],
             )?;
             if !set_scope(&transaction, &id, global, &projects)? {
                 return Ok(Some(Err(())));
@@ -218,6 +229,7 @@ pub async fn update(
         && color.is_none()
         && payload.is_global.is_none()
         && payload.project_ids.is_none()
+        && payload.prompt_template.is_none()
     {
         return Err(ApiError::validation("no editable fields provided"));
     }
@@ -250,6 +262,12 @@ pub async fn update(
                 transaction.execute(
                     "UPDATE labels SET color = ?1 WHERE id = ?2",
                     params![color, label.label.id],
+                )?;
+            }
+            if let Some(prompt_template) = &payload.prompt_template {
+                transaction.execute(
+                    "UPDATE labels SET prompt_template = ?1 WHERE id = ?2",
+                    params![prompt_template, label.label.id],
                 )?;
             }
             if payload.is_global.is_some() || payload.project_ids.is_some() {

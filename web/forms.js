@@ -660,6 +660,11 @@ export function showTokenOnce(created) {
 export function openLabelForm({ onCreated, label = null, projects = [] }) {
   const name = el("input", { class: "input", type: "text", required: true, maxlength: "32", value: label?.name || "" });
   const color = el("input", { class: "input input-color", type: "color", value: label?.color || "#2563eb" });
+  const promptTemplate = el("textarea", {
+    class: "input textarea",
+    rows: "4",
+    value: (label && label.prompt_template) || ""
+  });
   const global = el("input", { type: "checkbox" });
   global.checked = label?.is_global !== false;
   const projectBoxes = projects.map((project) => {
@@ -681,10 +686,11 @@ export function openLabelForm({ onCreated, label = null, projects = [] }) {
     ]),
     el("label", { class: "label-option" }, [global, t("label.global")]),
     projectList,
+    field(t("form.promptTemplate"), promptTemplate, t("form.labelPromptHint")),
     error,
     el("div", { class: "form-actions" }, [cancel, submit])
   ]);
-  const modal = openModal({ title: label ? t("label.edit") : t("panel.newLabel"), body: form, size: "small" });
+  const modal = openModal({ title: label ? t("label.edit") : t("panel.newLabel"), body: form, size: "medium" });
   cancel.addEventListener("click", () => modal.close());
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -695,7 +701,7 @@ export function openLabelForm({ onCreated, label = null, projects = [] }) {
     }
     setBusy(submit, true);
     try {
-      const payload = { name: name.value.trim(), color: color.value, is_global: global.checked, project_ids: global.checked ? [] : projectBoxes.map((box) => box.querySelector("input")).filter((input) => input.checked).map((input) => input.value) };
+      const payload = { name: name.value.trim(), color: color.value, is_global: global.checked, project_ids: global.checked ? [] : projectBoxes.map((box) => box.querySelector("input")).filter((input) => input.checked).map((input) => input.value), prompt_template: promptTemplate.value || null };
       const saved = label ? await api.updateLabel(label.id, payload) : await api.createLabel(payload);
       modal.close();
       if (onCreated) onCreated(saved);

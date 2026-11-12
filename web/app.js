@@ -1161,9 +1161,12 @@ async function renderSettingsProjects(token) {
     for (const label of labels) {
       const scope = label.is_global !== false ? t("label.global") :
         (label.project_ids || []).map((id) => projects.find((project) => project.id === id)?.key || id).join(", ") || t("label.noProjects");
-      const children = [el("div", { class: "settings-row-main" }, [
+      const children = [el("div", { class: "settings-row-main label-settings-summary" }, [
         el("span", { class: "label-chip", style: { "--label-color": label.color }, text: label.name }),
-        el("span", { class: "muted", text: scope })
+        el("span", { class: "muted", text: scope }),
+        label.prompt_template && label.prompt_template.trim()
+          ? el("span", { class: "badge badge-info", text: t("label.promptTemplateSet") })
+          : null
       ])];
       if (human) children.push(el("button", { type: "button", class: "button button-secondary button-small", text: t("settings.edit"), onClick: () => openLabelForm({ label, projects, onCreated: () => renderSettingsProjects(token) }) }));
       labelList.append(el("article", { class: "settings-row" }, children));
