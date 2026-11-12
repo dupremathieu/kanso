@@ -149,6 +149,12 @@ On one card, verify in order:
    date removes the chip.
 3. Labels: on a clean database use **New label** first to create `urgent` and
    add it in the same step; remove it, then add it again from the label picker.
+   Create a second project, then restrict the label to the first project in
+   **Settings → Projects → Labels**. Verify it is absent from the second project's
+   card creation and label picker, while existing associations remain visible.
+   Switch projects in the card creation form and verify the choices update.
+   Remove the last project from the scope, verify existing associations remain,
+   then remove one and verify that it cannot be added back until in scope again.
 4. Checklist: add two items; toggle one (progress becomes `1/2` and the board
    card shows `1/2`); edit an item's text; move it up/down; remove an item.
 5. Comments: add a comment; it appears in the panel and, when the other tab has

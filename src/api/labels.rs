@@ -3,12 +3,12 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use rusqlite::{params, OptionalExtension};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::model::Label;
 use super::tasks::insert_activity;
-use super::{require_human, validate_color, ApiError, ApiJson, Auth};
+use super::{require_human, validate_color, ApiError, ApiJson, ApiQuery, Auth};
 use crate::ids;
 use crate::server::AppState;
 
@@ -17,6 +17,8 @@ use crate::server::AppState;
 pub struct CreateLabel {
     name: String,
     color: String,
+    is_global: Option<bool>,
+    project_ids: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -24,6 +26,52 @@ pub struct CreateLabel {
 pub struct UpdateLabel {
     name: Option<String>,
     color: Option<String>,
+    is_global: Option<bool>,
+    project_ids: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ScopedLabel {
+    #[serde(flatten)]
+    label: Label,
+    is_global: bool,
+    project_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct LabelQuery {
+    project: Option<String>,
+}
+
+fn set_scope(
+    connection: &rusqlite::Connection,
+    id: &str,
+    global: bool,
+    projects: &[String],
+) -> crate::error::Result<bool> {
+    for project in projects {
+        if !connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1)",
+            [project],
+            |row| row.get::<_, bool>(0),
+        )? {
+            return Ok(false);
+        }
+    }
+    connection.execute(
+        "UPDATE labels SET is_global = ?1 WHERE id = ?2",
+        params![global, id],
+    )?;
+    connection.execute("DELETE FROM label_projects WHERE label_id = ?1", [id])?;
+    if !global {
+        for project in projects {
+            connection.execute(
+                "INSERT OR IGNORE INTO label_projects (label_id, project_id) VALUES (?1, ?2)",
+                params![id, project],
+            )?;
+        }
+    }
+    Ok(true)
 }
 
 fn validate_name(raw: &str) -> Result<String, ApiError> {
@@ -39,44 +87,63 @@ fn validate_name(raw: &str) -> Result<String, ApiError> {
     Ok(name.to_owned())
 }
 
-fn label_by_id(connection: &rusqlite::Connection, id: &str) -> crate::error::Result<Option<Label>> {
-    connection
+pub(super) fn label_by_id(
+    connection: &rusqlite::Connection,
+    id: &str,
+) -> crate::error::Result<Option<ScopedLabel>> {
+    let label = connection
         .query_row(
-            "SELECT id, name, color FROM labels WHERE id = ?1",
+            "SELECT id, name, color, is_global FROM labels WHERE id = ?1",
             [id],
             |row| {
-                Ok(Label {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    color: row.get(2)?,
-                })
+                Ok((
+                    Label {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        color: row.get(2)?,
+                    },
+                    row.get::<_, bool>(3)?,
+                ))
             },
         )
-        .optional()
-        .map_err(Into::into)
+        .optional()?;
+    let Some((label, is_global)) = label else {
+        return Ok(None);
+    };
+    let mut statement = connection
+        .prepare("SELECT project_id FROM label_projects WHERE label_id = ?1 ORDER BY project_id")?;
+    let project_ids = statement
+        .query_map([id], |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(Some(ScopedLabel {
+        label,
+        is_global,
+        project_ids,
+    }))
 }
 
 pub async fn list(
     State(state): State<AppState>,
     _auth: Auth,
-) -> Result<Json<Vec<Label>>, ApiError> {
+    ApiQuery(query): ApiQuery<LabelQuery>,
+) -> Result<Json<Vec<ScopedLabel>>, ApiError> {
     let labels = state
         .db
-        .call(|connection| {
-            let mut statement = connection
-                .prepare("SELECT id, name, color FROM labels ORDER BY name COLLATE NOCASE, id")?;
-            let labels = statement
-                .query_map([], |row| {
-                    Ok(Label {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                        color: row.get(2)?,
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(labels)
+        .call(move |connection| {
+            if let Some(ref project) = query.project {
+                let exists: bool = connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1 OR key = ?1 COLLATE NOCASE)",
+                    [project], |row| row.get(0),
+                )?;
+                if !exists { return Ok(None); }
+            }
+            let mut statement = connection.prepare("SELECT id FROM labels l WHERE ?1 IS NULL OR l.is_global = 1 OR EXISTS (SELECT 1 FROM label_projects lp JOIN projects p ON p.id = lp.project_id WHERE lp.label_id = l.id AND (p.id = ?1 OR p.key = ?1 COLLATE NOCASE)) ORDER BY name COLLATE NOCASE, id")?;
+            let ids = statement.query_map([query.project], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let labels = ids.iter().map(|id| label_by_id(connection, id).map(|label| label.expect("listed label exists"))).collect::<crate::error::Result<Vec<_>>>()?;
+            Ok(Some(labels))
         })
-        .await?;
+        .await?
+        .ok_or_else(|| ApiError::not_found("project not found"))?;
     Ok(Json(labels))
 }
 
@@ -88,6 +155,13 @@ pub async fn create(
     require_human(&auth.0)?;
     let name = validate_name(&payload.name)?;
     let color = validate_color(&payload.color)?;
+    let global = payload.is_global.unwrap_or(true);
+    let projects = payload.project_ids.unwrap_or_default();
+    if global && !projects.is_empty() {
+        return Err(ApiError::validation(
+            "global labels cannot specify projects",
+        ));
+    }
     let id = ids::uuid_v4()?;
 
     let label = state
@@ -109,20 +183,26 @@ pub async fn create(
                 "INSERT INTO labels (id, name, color) VALUES (?1, ?2, ?3)",
                 params![id, name, color],
             )?;
+            if !set_scope(&transaction, &id, global, &projects)? {
+                return Ok(Some(Err(())));
+            }
             let label = label_by_id(&transaction, &id)?;
             transaction.commit()?;
-            Ok(label)
+            Ok(label.map(Ok))
         })
         .await?
-        .ok_or_else(|| ApiError::conflict("a label with this name already exists"))?;
+        .ok_or_else(|| ApiError::conflict("a label with this name already exists"))?
+        .map_err(|_| ApiError::validation("unknown project"))?;
     state.publish("label.created", json!({ "label": &label }));
     Ok((StatusCode::CREATED, Json(label)).into_response())
 }
 
 enum UpdateOutcome {
-    Updated(Label),
+    Updated(ScopedLabel),
     NotFound,
     Conflict,
+    UnknownProject,
+    InvalidScope,
 }
 
 pub async fn update(
@@ -130,11 +210,15 @@ pub async fn update(
     auth: Auth,
     Path(id): Path<String>,
     ApiJson(payload): ApiJson<UpdateLabel>,
-) -> Result<Json<Label>, ApiError> {
+) -> Result<Json<ScopedLabel>, ApiError> {
     require_human(&auth.0)?;
     let name = payload.name.as_deref().map(validate_name).transpose()?;
     let color = payload.color.as_deref().map(validate_color).transpose()?;
-    if name.is_none() && color.is_none() {
+    if name.is_none()
+        && color.is_none()
+        && payload.is_global.is_none()
+        && payload.project_ids.is_none()
+    {
         return Err(ApiError::validation("no editable fields provided"));
     }
 
@@ -149,7 +233,7 @@ pub async fn update(
                 let duplicate = transaction
                     .query_row(
                         "SELECT 1 FROM labels WHERE name = ?1 COLLATE NOCASE AND id <> ?2",
-                        params![name, label.id],
+                        params![name, label.label.id],
                         |_| Ok(()),
                     )
                     .optional()?
@@ -159,16 +243,31 @@ pub async fn update(
                 }
                 transaction.execute(
                     "UPDATE labels SET name = ?1 WHERE id = ?2",
-                    params![name, label.id],
+                    params![name, label.label.id],
                 )?;
             }
             if let Some(ref color) = color {
                 transaction.execute(
                     "UPDATE labels SET color = ?1 WHERE id = ?2",
-                    params![color, label.id],
+                    params![color, label.label.id],
                 )?;
             }
-            let label = label_by_id(&transaction, &label.id)?
+            if payload.is_global.is_some() || payload.project_ids.is_some() {
+                let global = payload.is_global.unwrap_or(label.is_global);
+                let projects = payload.project_ids.as_deref().unwrap_or(&label.project_ids);
+                if global
+                    && payload
+                        .project_ids
+                        .as_ref()
+                        .is_some_and(|ids| !ids.is_empty())
+                {
+                    return Ok(UpdateOutcome::InvalidScope);
+                }
+                if !set_scope(&transaction, &label.label.id, global, projects)? {
+                    return Ok(UpdateOutcome::UnknownProject);
+                }
+            }
+            let label = label_by_id(&transaction, &label.label.id)?
                 .ok_or_else(|| crate::error::Error::msg("updated label missing"))?;
             transaction.commit()?;
             Ok(UpdateOutcome::Updated(label))
@@ -182,6 +281,10 @@ pub async fn update(
         }
         UpdateOutcome::NotFound => Err(ApiError::not_found("label not found")),
         UpdateOutcome::Conflict => Err(ApiError::conflict("a label with this name already exists")),
+        UpdateOutcome::UnknownProject => Err(ApiError::validation("unknown project")),
+        UpdateOutcome::InvalidScope => Err(ApiError::validation(
+            "global labels cannot specify projects",
+        )),
     }
 }
 
@@ -202,21 +305,21 @@ pub async fn delete(
             let task_ids = {
                 let mut statement =
                     transaction.prepare("SELECT task_id FROM task_labels WHERE label_id = ?1")?;
-                let rows = statement.query_map([&label.id], |row| row.get::<_, String>(0))?;
+                let rows = statement.query_map([&label.label.id], |row| row.get::<_, String>(0))?;
                 let mut task_ids = Vec::new();
                 for row in rows {
                     task_ids.push(row?);
                 }
                 task_ids
             };
-            transaction.execute("DELETE FROM labels WHERE id = ?1", [&label.id])?;
+            transaction.execute("DELETE FROM labels WHERE id = ?1", [&label.label.id])?;
             for task_id in task_ids {
                 insert_activity(
                     &transaction,
                     &task_id,
                     &actor,
                     "label_removed",
-                    &json!({ "label_id": label.id, "name": label.name }),
+                    &json!({ "label_id": label.label.id, "name": label.label.name }),
                 )?;
             }
             transaction.commit()?;

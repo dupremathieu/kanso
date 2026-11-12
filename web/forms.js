@@ -290,6 +290,16 @@ export function openCardForm({ project, projects = [], labels = [], initialStatu
       [input, el("span", { class: "label-chip", style: { "--label-color": label.color } }, [label.name])]
     );
   });
+  const updateLabelVisibility = () => {
+    const projectId = projectSelect.value;
+    labels.forEach((label, index) => {
+      const visible = label.is_global !== false || (label.project_ids || []).includes(projectId);
+      labelBoxes[index].hidden = !visible;
+      if (!visible) labelBoxes[index].querySelector("input").checked = false;
+    });
+  };
+  projectSelect.addEventListener("change", updateLabelVisibility);
+  updateLabelVisibility();
 
   const error = formError();
   const cancel = el("button", { type: "button", class: "button button-secondary", text: t("form.cancel") });
@@ -647,21 +657,34 @@ export function showTokenOnce(created) {
   return modal;
 }
 
-export function openLabelForm({ onCreated }) {
-  const name = el("input", { class: "input", type: "text", required: true, maxlength: "32" });
-  const color = el("input", { class: "input input-color", type: "color", value: "#2563eb" });
+export function openLabelForm({ onCreated, label = null, projects = [] }) {
+  const name = el("input", { class: "input", type: "text", required: true, maxlength: "32", value: label?.name || "" });
+  const color = el("input", { class: "input input-color", type: "color", value: label?.color || "#2563eb" });
+  const global = el("input", { type: "checkbox" });
+  global.checked = label?.is_global !== false;
+  const projectBoxes = projects.map((project) => {
+    const input = el("input", { type: "checkbox", value: project.id });
+    input.checked = (label?.project_ids || []).includes(project.id);
+    return el("label", { class: "label-option" }, [input, `${project.key} — ${project.name}`]);
+  });
+  const projectList = el("div", { class: "label-options" }, projectBoxes);
+  const updateScope = () => { projectList.hidden = global.checked; };
+  global.addEventListener("change", updateScope);
+  updateScope();
   const error = formError();
   const cancel = el("button", { type: "button", class: "button button-secondary", text: t("form.cancel") });
-  const submit = el("button", { type: "submit", class: "button button-primary", text: t("form.create") });
+  const submit = el("button", { type: "submit", class: "button button-primary", text: label ? t("settings.edit") : t("form.create") });
   const form = el("form", { class: "form-stack" }, [
     el("div", { class: "form-row" }, [
       field(t("form.name"), name),
       field(t("form.color"), color)
     ]),
+    el("label", { class: "label-option" }, [global, t("label.global")]),
+    projectList,
     error,
     el("div", { class: "form-actions" }, [cancel, submit])
   ]);
-  const modal = openModal({ title: t("panel.newLabel"), body: form, size: "small" });
+  const modal = openModal({ title: label ? t("label.edit") : t("panel.newLabel"), body: form, size: "small" });
   cancel.addEventListener("click", () => modal.close());
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -672,9 +695,10 @@ export function openLabelForm({ onCreated }) {
     }
     setBusy(submit, true);
     try {
-      const label = await api.createLabel({ name: name.value.trim(), color: color.value });
+      const payload = { name: name.value.trim(), color: color.value, is_global: global.checked, project_ids: global.checked ? [] : projectBoxes.map((box) => box.querySelector("input")).filter((input) => input.checked).map((input) => input.value) };
+      const saved = label ? await api.updateLabel(label.id, payload) : await api.createLabel(payload);
       modal.close();
-      if (onCreated) onCreated(label);
+      if (onCreated) onCreated(saved);
     } catch (failure) {
       showError(error, failure.message || t("common.error"));
       toastForError(failure, t);
