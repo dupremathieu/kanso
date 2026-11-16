@@ -77,6 +77,7 @@ pub(crate) struct Preview {
     pub project: String,
     pub provider: String,
     pub source: String,
+    pub label_id: Option<String>,
     pub candidates: Vec<Candidate>,
 }
 

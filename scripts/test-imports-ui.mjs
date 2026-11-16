@@ -60,6 +60,11 @@ try {
   });
   assert.equal(setup.status(), 201);
   const project = await setup.json();
+  const labelResponse = await page.request.post(`${base}/api/labels`, {
+    headers: { Origin: base }, data: { name: "Imported", color: "#5678ab" }
+  });
+  assert.equal(labelResponse.status(), 201);
+  const label = await labelResponse.json();
   const localTask = await page.request.post(`${base}/api/tasks`, {
     headers: { Origin: base },
     data: { project_id: project.id, title: "Verify imported detail", description: "<script>alert(1)</script> **External** task" }
@@ -154,6 +159,7 @@ try {
   const destination = page.getByLabel("Destination project", { exact: true });
   const provider = page.getByLabel("Provider", { exact: true });
   const source = page.getByLabel("Source", { exact: true });
+  const labelSelect = page.getByLabel("Label for new tasks", { exact: true });
   const preview = page.getByRole("button", { name: "Preview", exact: true });
   assert.equal(await preview.isDisabled(), true);
   await destination.selectOption(project.id);
@@ -170,8 +176,10 @@ try {
   await destination.selectOption(project.id);
   await provider.selectOption("browser-fixture");
   await source.selectOption("source");
+  await labelSelect.selectOption(label.id);
   await page.getByLabel("Query", { exact: true }).fill("assigned to me");
   await preview.click();
+  await page.getByText("Label for new tasks: Imported", { exact: true }).waitFor();
   const choice = page.getByRole("checkbox", { name: `Select ${candidate.title}`, exact: true });
   const confirm = page.getByRole("button", { name: "Import selected", exact: true });
   await choice.waitFor();
@@ -194,6 +202,8 @@ try {
   await page.setViewportSize({ width: 360, height: 780 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   if (screenshots) await page.screenshot({ path: join(resolve(screenshots), "imports-mobile.png"), fullPage: true });
+  await labelSelect.selectOption("");
+  assert.equal(await confirm.count(), 0);
   await page.getByLabel("Query", { exact: true }).fill("changed");
   assert.equal(await confirm.count(), 0);
   failPreview = true;

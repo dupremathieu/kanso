@@ -72,6 +72,7 @@ export async function renderImports(region, projects, current, navigate) {
     el("option", { value: provider.id, text: provider.name })
   ));
   const source = select(t("imports.source"), t("imports.selectSource"), []);
+  const label = select(t("imports.label"), t("imports.noLabel"), []);
   const category = el("select", { class: "input", "aria-label": t("github.categoryLabel") });
   const categoryField = el("label", { class: "field", hidden: true }, [el("span", { class: "field-label", text: t("github.category") }), category]);
   page.append(categoryField);
@@ -139,19 +140,28 @@ export async function renderImports(region, projects, current, navigate) {
     discovering = Boolean(project.value);
     const version = ++discoveryVersion;
     providers = [];
+    label.replaceChildren(el("option", { value: "", text: t("imports.noLabel") }));
     if (!project.value) provider.value = "";
     category.replaceChildren(el("option", { value: "", text: t("github.selectCategory") }));
     controls();
     if (!project.value) return;
     try {
-      const scoped = await api.importProviders(project.value);
+      const [scoped, labelResult] = await Promise.all([
+        api.importProviders(project.value),
+        api.labels().then((labels) => ({ labels }), (failure) => ({ failure }))
+      ]);
       if (!current() || version !== discoveryVersion) return;
+      label.replaceChildren(el("option", { value: "", text: t("imports.noLabel") }), ...(labelResult.labels || [])
+        .filter((item) => item.is_global !== false || (item.project_ids || []).includes(project.value))
+        .map((item) => el("option", { value: item.id, text: item.name })));
       providers = scoped;
       discovering = false;
       controls();
+      if (labelResult.failure) error.textContent = labelResult.failure.message;
     } catch (failure) { if (current() && version === discoveryVersion) { providers = []; discovering = false; controls(); error.textContent = failure.message; } }
   });
   provider.addEventListener("change", controls);
+  label.addEventListener("change", invalidate);
   source.addEventListener("change", () => { categories(); invalidate(); });
   category.addEventListener("change", categoryChanged);
   previewButton.addEventListener("click", async () => {
@@ -161,6 +171,7 @@ export async function renderImports(region, projects, current, navigate) {
       project_id: project.value,
       provider: provider.value,
       source: selectedSource(),
+      label_id: label.value || null,
       filters: provider.value === "github"
         ? (allAssignees?.checked && category.value === "issues" ? { user: "" } : filters[0]?.input.value ? { user: filters[0].input.value } : {})
         : Object.fromEntries(filters.map((filter) => [filter.id, filter.input.value]))
@@ -237,6 +248,7 @@ export async function renderImports(region, projects, current, navigate) {
       });
       results.replaceChildren(
         el("h2", { text: t("imports.preview") }),
+        ...(payload.label_id ? [el("p", { text: t("imports.previewLabel", { label: label.selectedOptions[0].textContent }) })] : []),
         data.candidates.length ? list : el("p", { text: t("imports.empty") }),
         confirm, outcome
       );

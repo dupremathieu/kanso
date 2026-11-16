@@ -8,6 +8,14 @@ the local card is archived. Local edits are never overwritten. Imports create
 ordinary active backlog cards with normal priority; the task detail links to
 the original. Provenance is included in JSON exports and database backups.
 
+Optionally select one existing label before preview. Only global labels and
+labels available to the destination project appear. The label applies to newly
+created cards only: existing, skipped and archived imports are never relabeled.
+Changing the label clears the preview; changing project also resets the label.
+No label is selected by default, and selection is not remembered. Label prompt
+templates work as they do for other tasks. Remote labels are not copied and
+labels are never created by importing.
+
 ## GitHub
 
 In **Settings → Projects**, open **GitHub repositories** for the destination
@@ -116,11 +124,18 @@ do not use mutable titles or URLs as identity. The provider ID is part of the
 deduplication key, scoped to the destination project.
 
 Previews are held only in memory, bound to the authenticated session or token,
-project, provider and source, expire after ten minutes, and are limited to 200
-candidates and 2 MiB. Starting a newer, well-formed preview request invalidates
-the caller's prior one, even if validation or the provider call fails.
+project, provider, source and optional label ID, expire after ten minutes, and
+are limited to 200 candidates and 2 MiB. Starting a newer, well-formed preview
+request invalidates the caller's prior one, even if validation or the provider
+call fails.
 Confirmation accepts only distinct indexes into that server snapshot, not
 candidate content. A restart or expired snapshot requires a new preview.
+Omitting `label_id` in preview keeps the existing behavior of creating
+unlabeled tasks. A selected label must exist and be available to the destination
+at preview and confirmation; each new-card transaction checks again and
+atomically adds the label and its activity. If the label becomes unavailable,
+confirmation rejects the batch before creation or reports individual failures
+if availability changes later.
 Candidate identities and kinds must be nonempty, bounded and free of control
 characters; source URLs must be safe HTTP(S) URLs without userinfo. Existing
 title and description limits apply. Invalid items are reported individually,
