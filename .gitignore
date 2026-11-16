@@ -19,3 +19,5 @@ deploy/out/
 node_modules/
 .DS_Store
 dist/
+__pycache__/
+*.pyc

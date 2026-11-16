@@ -17,7 +17,7 @@ static COUNTER: AtomicU32 = AtomicU32::new(0);
 
 /// Every asset the shell needs, with its expected content type exercised by the
 /// serving test. New web modules must be added here.
-const MODULES: [&str; 12] = [
+const MODULES: [&str; 14] = [
     "/app.css",
     "/app.js",
     "/api.js",
@@ -25,6 +25,8 @@ const MODULES: [&str; 12] = [
     "/panel.js",
     "/imports.js",
     "/github-settings.js",
+    "/redmine-import.js",
+    "/redmine-settings.js",
     "/forms.js",
     "/dom.js",
     "/i18n/en.js",

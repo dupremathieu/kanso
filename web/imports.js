@@ -1,6 +1,7 @@
 import { api } from "./api.js?v={{VERSION}}";
 import { el } from "./dom.js?v={{VERSION}}";
 import { t } from "./i18n/index.js?v={{VERSION}}";
+import { redmineImportControls } from "./redmine-import.js?v={{VERSION}}";
 
 // Source links are external, untrusted input, even when a provider is trusted.
 export function sourceLink(url) {
@@ -89,6 +90,7 @@ export async function renderImports(region, projects, current, navigate) {
   let allLabel = null;
   let discovering = false;
   let discoveryVersion = 0;
+  let redmine = null;
   function selectedSource() {
     return provider.value === "github" ? (source.value && category.value ? `${source.value}|${category.value}` : "") : source.value;
   }
@@ -97,11 +99,12 @@ export async function renderImports(region, projects, current, navigate) {
     results.replaceChildren();
     error.textContent = "";
     previewButton.textContent = t("imports.preview");
-    previewButton.disabled = discovering || !(project.value && provider.value && selectedSource());
+    previewButton.disabled = discovering || !(project.value && provider.value && selectedSource()) || (provider.value === "redmine" && !redmine?.valid());
   }
   function controls() {
     const selected = providers.find((providerInfo) => providerInfo.id === provider.value);
     const github = provider.value === "github";
+    redmine = null;
     categoryField.hidden = !github;
     const sources = selected?.sources || [];
     const repositories = [...new Set(sources.map((item) => item.id.split("|")[0]))];
@@ -119,6 +122,10 @@ export async function renderImports(region, projects, current, navigate) {
     filtersBox.replaceChildren(...filters.map((filter) => el("label", { class: "field" }, [
       el("span", { class: "field-label", text: filter.label }), filter.input
     ])), ...(allLabel ? [allLabel] : []));
+    if (provider.value === "redmine") {
+      redmine = redmineImportControls(invalidate);
+      filtersBox.replaceChildren(redmine.root);
+    }
     categories();
     invalidate();
   }
@@ -163,7 +170,7 @@ export async function renderImports(region, projects, current, navigate) {
   });
   provider.addEventListener("change", controls);
   label.addEventListener("change", invalidate);
-  source.addEventListener("change", () => { categories(); invalidate(); });
+  source.addEventListener("change", () => { categories(); if (redmine) redmine.load(source.value); invalidate(); });
   category.addEventListener("change", categoryChanged);
   previewButton.addEventListener("click", async () => {
     invalidate();
@@ -173,7 +180,7 @@ export async function renderImports(region, projects, current, navigate) {
       provider: provider.value,
       source: selectedSource(),
       label_id: label.value || null,
-      filters: provider.value === "github"
+      filters: provider.value === "redmine" ? redmine.values() : provider.value === "github"
         ? (allAssignees?.checked && category.value === "issues" ? { user: "" } : filters[0]?.input.value ? { user: filters[0].input.value } : {})
         : Object.fromEntries(filters.map((filter) => [filter.id, filter.input.value]))
     };

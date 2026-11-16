@@ -16,6 +16,50 @@ No label is selected by default, and selection is not remembered. Label prompt
 templates work as they do for other tasks. Remote labels are not copied and
 labels are never created by importing.
 
+## Redmine
+
+In **Settings → Integration**, add a named Redmine connection with its base URL
+(a path prefix is supported) and the account holder's personal API key. Use
+**Check account** to identify that key's account. Connections are shared by all
+Kanso browser sessions: **Me** always means the owner of the selected Redmine
+key, not a separate Kanso identity. Keys are write-only in the UI, survive
+logout and are sent upstream only in the `X-Redmine-API-Key` header. Deleting a
+connection deletes the saved key but does not revoke it in Redmine.
+
+The server stores keys **unencrypted** in `redmine-connections.json` next to the
+database, using an atomic mode-0600 file. JSON exports and database-only backups
+exclude this file; full filesystem backups include it and must be protected.
+HTTP does not encrypt keys in transit: prefer HTTPS. Private and local HTTP(S)
+instances are allowed, so any Kanso browser session can direct the server to
+call private addresses. Give browser access only to trusted humans.
+
+Choose an existing active Kanso project, Redmine and a connection. Discover
+accessible projects, then select all or one project. Selecting one project
+excludes its subprojects. The default is open issues and all assignees, without
+a watcher restriction.
+Choose a numeric Redmine user ID or **Me** for assignee, and optionally
+**Watched by me**. AND/OR applies only to these two restricted predicates;
+project and state always apply to both. When either predicate is unrestricted,
+only the other one applies. The preview is read-only; select individual issues
+before importing. The original description is preserved as text, without Textile
+conversion, with a Redmine reference and upstream link.
+
+This is manual, one-way issue import only: no project creation, status mapping,
+synchronization or upstream writes. New cards start in backlog with normal
+priority; assignees, comments, attachments and other issue metadata are not
+copied. Identity is the normalized scheme, host, port and base path plus numeric
+issue ID; changing a connection name or key does not change it. Alternate DNS
+aliases or different schemes cannot be automatically recognized as the same
+instance. A changed or deleted connection invalidates its pending previews.
+Searches are bounded to 200 issues and 2 MiB; errors or oversized searches
+require narrower filters instead of returning an incomplete list.
+
+![Redmine connection settings with a synthetic connection](screenshots/kanso-3/settings-desktop.png)
+
+![Redmine project, assignee, state and watched filters](screenshots/kanso-3/filters-desktop.png)
+
+![Redmine issue preview from the synthetic fixture](screenshots/kanso-3/preview-desktop.png)
+
 ## GitHub
 
 In **Settings → Projects**, open **GitHub repositories** for the destination
@@ -106,12 +150,13 @@ filter, task, comment, or diagnostic report.
 ## Provider extension contract
 
 Implement `importer::Provider` and register it in the server's `AppState` via
-`with_import_providers`. Production registers the GitHub adapter. `info()`
-describes public, non-secret provider metadata, source choices and text filter
-controls; `project_info()` may resolve sources from local configuration under
-the database lock and must not perform remote I/O. `preview()` validates filter semantics and performs remote I/O on a
-blocking worker, without a database lock. The adapter owns authentication,
-pagination, source configuration and any category-specific semantics. It must
+`with_import_providers`. Production registers the GitHub and Redmine adapters.
+`info()` describes public, non-secret provider metadata, source choices and
+filter identifiers; the browser supplies typed Redmine controls.
+`project_info()` may resolve sources from local configuration under the database
+lock and must not perform remote I/O. `preview()` validates filter semantics and
+performs remote I/O on a blocking worker, without a database lock. The adapter
+owns authentication, pagination, source configuration and category semantics. It must
 not put credentials in controls, results, URLs, task content, logs or errors.
 `info()` must be fast and nonblocking. The shared layer does not time out or
 cancel `preview()`; each adapter must set connection, read and overall request
@@ -159,7 +204,8 @@ for mutations. Device material is returned only to the starting session.
 
 1. `GET /api/imports/providers?project_id=<id>` returns provider IDs/names, available source
    IDs/names, and filter IDs/labels. An empty array means no provider is
-   registered. Filter controls are plain text; adapters validate their semantics.
+   registered. Adapters validate filter semantics; provider-specific browser
+   controls can expose typed selections.
    Without `project_id`, only global metadata is returned. For GitHub, a source
    ID is `owner/repo|issues`, `owner/repo|review`, or `owner/repo|follow`, and
    only enabled sources for that project are returned. Omitting the `user`

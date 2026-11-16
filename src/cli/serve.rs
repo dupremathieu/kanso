@@ -78,6 +78,7 @@ async fn serve(port: Option<u16>, data_dir: Option<PathBuf>) -> Result<(), CliEr
         crate::adapter::openchamber::OpenChamber::new(settings.url(), settings.token())
     }));
     crate::api::integration::load(&state).map_err(startup)?;
+    state.redmine.reload().map_err(startup)?;
     crate::adapter::poller::spawn(state.clone());
     let github_auth = state.github_auth.clone();
     let app = server::router(state);
