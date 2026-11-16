@@ -16,8 +16,9 @@ node tests/pairing_ui.mjs
 Production registers GitHub. `tests/api.rs` exercises project-scoped discovery,
 authorization and import using a test-only fixture; provider unit tests use
 mocked GitHub responses and subprocesses without live credentials.
-`tests/imports_ui.mjs` covers category/filter selection, safe links, in-flight
-state, errors, and invalidation without browser dependencies and runs in CI.
+`tests/imports_ui.mjs` covers category/filter selection, scoped batch labels,
+safe links, in-flight state, errors, and invalidation without browser
+dependencies and runs in CI.
 
 For an optional real Chromium check, build the binary and install Playwright
 in your external test tooling, then run:

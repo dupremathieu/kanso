@@ -144,6 +144,7 @@ pub struct PreviewRequest {
     provider: String,
     source: String,
     filters: HashMap<String, String>,
+    label_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -201,6 +202,7 @@ fn reserve_preview(state: &AppState, auth: &Auth) -> Result<String, ApiError> {
             project: String::new(),
             provider: String::new(),
             source: String::new(),
+            label_id: None,
             candidates: Vec::new(),
         },
     );
@@ -212,6 +214,39 @@ const EXISTING_SQL: &str = "SELECT p.key || '-' || t.number
      JOIN tasks t ON t.id = x.task_id
      JOIN projects p ON p.id = t.project_id
      WHERE x.project_id = ?1 AND x.provider = ?2 AND x.identity = ?3";
+
+fn label_available(
+    db: &rusqlite::Connection,
+    project: &str,
+    label: &str,
+) -> crate::error::Result<bool> {
+    Ok(db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM labels l WHERE l.id = ?1 AND (l.is_global = 1 OR EXISTS (SELECT 1 FROM label_projects lp WHERE lp.label_id = l.id AND lp.project_id = ?2)))",
+        params![label, project],
+        |row| row.get(0),
+    )?)
+}
+
+async fn validate_label(
+    state: &AppState,
+    project: &str,
+    label: Option<&str>,
+) -> Result<(), ApiError> {
+    if let Some(label) = label {
+        let project = project.to_owned();
+        let label = label.to_owned();
+        if !state
+            .db
+            .call(move |db| label_available(db, &project, &label))
+            .await?
+        {
+            return Err(ApiError::validation(
+                "Label is missing or unavailable for this project",
+            ));
+        }
+    }
+    Ok(())
+}
 
 pub async fn preview(
     State(state): State<AppState>,
@@ -225,6 +260,7 @@ pub async fn preview(
             "Destination project is missing or archived",
         ));
     }
+    validate_label(&state, &request.project_id, request.label_id.as_deref()).await?;
     let provider = state
         .imports
         .providers
@@ -317,6 +353,7 @@ pub async fn preview(
     snapshot.project = request.project_id;
     snapshot.provider = request.provider;
     snapshot.source = request.source;
+    snapshot.label_id = request.label_id;
     snapshot.candidates = candidates;
     Ok(Json(PreviewResponse {
         preview_id,
@@ -347,8 +384,10 @@ enum ImportResult {
     Existing(String),
     MissingProject,
     DisabledSource,
+    MissingLabel,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn import_candidate(
     db: &mut rusqlite::Connection,
     project: &str,
@@ -357,6 +396,7 @@ fn import_candidate(
     source: &str,
     actor: &str,
     candidate: &Candidate,
+    label_id: Option<&str>,
 ) -> crate::error::Result<ImportResult> {
     let tx = db.transaction()?;
     let project_exists: bool = tx.query_row(
@@ -385,6 +425,11 @@ fn import_candidate(
         .optional()?;
     if let Some(reference) = existing {
         return Ok(ImportResult::Existing(reference));
+    }
+    if let Some(label_id) = label_id {
+        if !label_available(&tx, project, label_id)? {
+            return Ok(ImportResult::MissingLabel);
+        }
     }
 
     let number: i64 = tx.query_row(
@@ -438,8 +483,22 @@ fn import_candidate(
         "created",
         &json!({"number": number, "status": "backlog"}),
     )?;
-    let task = tasks::task_by_ref(&tx, &id)?
+    if let Some(label_id) = label_id {
+        tx.execute(
+            "INSERT INTO task_labels (task_id, label_id) VALUES (?1, ?2)",
+            params![id, label_id],
+        )?;
+        tasks::insert_activity(
+            &tx,
+            &id,
+            actor,
+            "label_added",
+            &json!({"label_id": label_id}),
+        )?;
+    }
+    let mut task = tasks::task_by_ref(&tx, &id)?
         .ok_or_else(|| crate::error::Error::msg("created task missing"))?;
+    task.labels = tasks::load_labels(&tx, &id)?;
     tx.commit()?;
     Ok(ImportResult::Created(Box::new(task)))
 }
@@ -484,6 +543,7 @@ pub async fn confirm(
             "Destination project is missing or archived",
         ));
     }
+    validate_label(&state, &preview.project, preview.label_id.as_deref()).await?;
     let adapter = state
         .imports
         .providers
@@ -508,6 +568,7 @@ pub async fn confirm(
         let actor = auth.0.actor().to_owned();
         let adapter = adapter.clone();
         let source = preview.source.clone();
+        let label_id = preview.label_id.clone();
         let result = state
             .db
             .call(move |db| {
@@ -519,6 +580,7 @@ pub async fn confirm(
                     &source,
                     &actor,
                     &candidate,
+                    label_id.as_deref(),
                 )
             })
             .await;
@@ -545,6 +607,12 @@ pub async fn confirm(
                 reference: None,
                 message: Some("Repository or category is no longer enabled"),
             }),
+            Ok(ImportResult::MissingLabel) => outcomes.push(Outcome {
+                index,
+                status: "failed",
+                reference: None,
+                message: Some("Label is missing or unavailable for this project"),
+            }),
             _ => outcomes.push(Outcome {
                 index,
                 status: "failed",
@@ -562,6 +630,54 @@ mod tests {
     use crate::auth::{AuthConfig, Identity, IdentityKind, Scope};
     use crate::db::Database;
     use crate::test_support::TempDir;
+
+    #[tokio::test]
+    async fn candidate_transaction_rejects_missing_label_before_creation() {
+        struct Fixture;
+        impl crate::importer::Provider for Fixture {
+            fn info(&self) -> ProviderInfo {
+                ProviderInfo {
+                    id: "fixture".into(),
+                    name: "Fixture".into(),
+                    sources: vec![crate::importer::Source {
+                        id: "source".into(),
+                        name: "Source".into(),
+                    }],
+                    filters: vec![],
+                }
+            }
+            fn preview(
+                &self,
+                _: &str,
+                _: &HashMap<String, String>,
+            ) -> Result<Vec<Candidate>, crate::importer::ProviderError> {
+                Ok(vec![])
+            }
+        }
+        let dir = TempDir::new();
+        let db = Database::open(&dir.path().join("db.sqlite")).unwrap();
+        db.call(|db| {
+            db.execute(
+                "INSERT INTO projects (id, key, name, position, created_at, updated_at) VALUES ('p', 'TST', 'Test', 1, 1, 1)",
+                [],
+            )?;
+            let candidate = Candidate {
+                identity: "item".into(),
+                kind: "issue".into(),
+                title: "Item".into(),
+                description: String::new(),
+                source_url: "https://example.org/item".into(),
+                invalid_reason: None,
+            };
+            assert!(matches!(
+                import_candidate(db, "p", "fixture", &Fixture, "source", "test", &candidate, Some("missing"))?,
+                ImportResult::MissingLabel
+            ));
+            let count: i64 = db.query_row("SELECT count(*) FROM tasks", [], |row| row.get(0))?;
+            assert_eq!(count, 0);
+            Ok(())
+        }).await.unwrap();
+    }
 
     #[test]
     fn source_urls_only_allow_safe_web_authorities() {
@@ -639,6 +755,7 @@ mod tests {
                 project: "p".into(),
                 provider: "fixture".into(),
                 source: "s".into(),
+                label_id: None,
                 candidates: Vec::new(),
             },
         );

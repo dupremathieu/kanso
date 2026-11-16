@@ -1101,6 +1101,155 @@ fn import_confirm_request(project: &str, preview_id: &Value) -> Value {
 }
 
 #[tokio::test]
+async fn import_label_scope_snapshot_and_retries() {
+    let app = import_app(std::sync::Arc::new(TestImportProvider));
+    let cookie = app.login().await;
+    let a = app.create_project(&cookie, "ILA").await;
+    let b = app.create_project(&cookie, "ILB").await;
+    let a_id = a["id"].as_str().unwrap();
+    let b_id = b["id"].as_str().unwrap();
+    let scoped = app.cookie_post("/api/labels", Some(json!({"name":"imported", "color":"#abcdef", "is_global":false, "project_ids":[a_id]})), &cookie).await;
+    let label = scoped.body["id"].as_str().unwrap();
+    for (project, value) in [(a_id, "missing"), (b_id, label)] {
+        let mut request = import_preview_request(project, "");
+        request["label_id"] = json!(value);
+        assert_eq!(
+            app.cookie_post("/api/imports/preview", Some(request), &cookie)
+                .await
+                .status,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let mut request = import_preview_request(a_id, "");
+    request["label_id"] = json!(label);
+    let preview = app
+        .cookie_post("/api/imports/preview", Some(request.clone()), &cookie)
+        .await;
+    assert_eq!(preview.status, StatusCode::OK);
+    let confirm = import_confirm_request(a_id, &preview.body["preview_id"]);
+    let mut forged = confirm.clone();
+    forged["label_id"] = json!("other");
+    assert_eq!(
+        app.cookie_post("/api/imports/confirm", Some(forged), &cookie)
+            .await
+            .status,
+        StatusCode::BAD_REQUEST
+    );
+    let mut events = app.state.events.subscribe();
+    let outcome = app
+        .cookie_post("/api/imports/confirm", Some(confirm.clone()), &cookie)
+        .await;
+    assert_eq!(outcome.body[0]["status"], "created");
+    let event = events.try_recv().unwrap();
+    assert_eq!(event.kind, "task.created");
+    assert_eq!(event.data["task"]["labels"][0]["id"], label);
+    assert_eq!(
+        app.db_i64("SELECT count(*) FROM task_labels", vec![]).await,
+        1
+    );
+    assert_eq!(
+        app.db_i64(
+            "SELECT count(*) FROM activity WHERE kind = 'label_added'",
+            vec![]
+        )
+        .await,
+        1
+    );
+    let retry = app
+        .cookie_post("/api/imports/confirm", Some(confirm), &cookie)
+        .await;
+    assert_eq!(retry.body[0]["status"], "skipped");
+    assert_eq!(
+        app.db_i64("SELECT count(*) FROM task_labels", vec![]).await,
+        1
+    );
+    app.state.db.call(|db| {
+        db.execute_batch("CREATE TRIGGER import_label_failure BEFORE INSERT ON task_labels BEGIN SELECT RAISE(ABORT, 'fixture'); END")?;
+        Ok(())
+    }).await.unwrap();
+    let mut other = import_confirm_request(a_id, &preview.body["preview_id"]);
+    other["selected"] = json!([3]);
+    let failed = app
+        .cookie_post("/api/imports/confirm", Some(other), &cookie)
+        .await;
+    assert_eq!(failed.body[0]["status"], "failed");
+    assert_eq!(app.db_i64("SELECT count(*) FROM tasks", vec![]).await, 1);
+    assert!(events.try_recv().is_err());
+    app.state
+        .db
+        .call(|db| {
+            db.execute_batch("DROP TRIGGER import_label_failure")?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let preview = app
+        .cookie_post("/api/imports/preview", Some(request), &cookie)
+        .await;
+    let confirm = import_confirm_request(a_id, &preview.body["preview_id"]);
+    assert_eq!(
+        app.cookie_patch(
+            &format!("/api/labels/{label}"),
+            json!({"project_ids":[]}),
+            &cookie
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.cookie_post("/api/imports/confirm", Some(confirm), &cookie)
+            .await
+            .status,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(app.db_i64("SELECT count(*) FROM tasks", vec![]).await, 1);
+}
+
+#[tokio::test]
+async fn import_does_not_relabel_existing_unlabeled_task() {
+    let app = import_app(std::sync::Arc::new(TestImportProvider));
+    let cookie = app.login().await;
+    let project = app.create_project(&cookie, "ILC").await;
+    let id = project["id"].as_str().unwrap();
+    let preview = app
+        .cookie_post(
+            "/api/imports/preview",
+            Some(import_preview_request(id, "")),
+            &cookie,
+        )
+        .await;
+    let confirm = import_confirm_request(id, &preview.body["preview_id"]);
+    assert_eq!(
+        app.cookie_post("/api/imports/confirm", Some(confirm), &cookie)
+            .await
+            .body[0]["status"],
+        "created"
+    );
+    assert_eq!(
+        app.db_i64("SELECT count(*) FROM task_labels", vec![]).await,
+        0
+    );
+    let label = app.create_label(&cookie, "later", "#abcdef").await;
+    let mut request = import_preview_request(id, "");
+    request["label_id"] = label["id"].clone();
+    let preview = app
+        .cookie_post("/api/imports/preview", Some(request), &cookie)
+        .await;
+    let confirm = import_confirm_request(id, &preview.body["preview_id"]);
+    assert_eq!(
+        app.cookie_post("/api/imports/confirm", Some(confirm), &cookie)
+            .await
+            .body[0]["status"],
+        "skipped"
+    );
+    assert_eq!(
+        app.db_i64("SELECT count(*) FROM task_labels", vec![]).await,
+        0
+    );
+}
+
+#[tokio::test]
 async fn import_mutations_enforce_auth_csrf_and_snapshot_ownership() {
     let app = import_app(std::sync::Arc::new(TestImportProvider));
     let cookie = app.login().await;
