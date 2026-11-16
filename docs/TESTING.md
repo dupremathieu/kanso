@@ -13,9 +13,10 @@ node tests/pairing_ui.mjs
 
 ## External task imports
 
-Production registers GitHub. `tests/api.rs` exercises project-scoped discovery,
-authorization and import using a test-only fixture; provider unit tests use
-mocked GitHub responses and subprocesses without live credentials.
+Production registers GitHub and Redmine. `tests/api.rs` exercises project-scoped
+discovery, authorization and import using a test-only fixture; provider unit
+tests use mocked GitHub subprocesses and Redmine HTTP responses without live
+credentials.
 `tests/imports_ui.mjs` covers category/filter selection, scoped batch labels,
 safe links, in-flight state, errors, and invalidation without browser
 dependencies and runs in CI.
@@ -513,3 +514,39 @@ node scripts/test-recall-ui.mjs
 ```
 
 It exercises the instruction form, failed delivery and explicit retry.
+
+## Redmine importer verification (KANSO-3)
+
+The Redmine UI browser check starts a disposable Kanso server and a synthetic,
+read-only local Redmine HTTP fixture with a public test key. It exercises
+browser connection settings, project discovery, typed controls, preview,
+confirmation and invalidation. It overwrites the screenshots under
+`docs/screenshots/kanso-3/` on each run. Backend coverage lives in the Redmine
+importer and connection modules and `tests/api.rs`.
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+node tests/imports_ui.mjs
+cargo build --locked
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/test-imports-ui.mjs
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/test-redmine-ui.mjs
+```
+
+Live integration requires a disposable Redmine account whose API key is passed
+privately in `REDMINE_API_KEY`, for example by a coordinator using
+`kanso secret exec` to launch `python3 scripts/test-redmine-live.py`. The
+runner starts an isolated Kanso data directory, reads Redmine without writing to
+it, tests discovery and AND/OR filters, and imports only into that isolated
+Kanso database. It does not print the key, response bodies or environment.
+`REDMINE_URL` defaults to `http://127.0.0.1:8088`; the disposable data directory
+is removed on normal completion. The synthetic fixture exercises runner
+plumbing, not real Redmine filter semantics; the live check requires a
+separately supplied key.
+
+Implementation verification on 2026-11-16: the commands above passed with a
+locally installed Playwright module. `cargo test` covered 197 library, 52 API,
+17 CLI, 68 integration, 2 SBOM, 7 SSE and 12 UI tests. The browser runner also
+ran the live-test script against its synthetic public-key fixture. Real Redmine
+verification is pending the coordinator's private credential handoff.

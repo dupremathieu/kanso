@@ -20,6 +20,17 @@ Include as far as you can:
 
 Never send real credentials, agent tokens, session cookies or live data.
 
+## Redmine credentials
+
+Redmine connections are shared by all authenticated Kanso browser sessions.
+Their personal API keys are stored as plaintext in a server-owned mode-0600
+`redmine-connections.json` next to the database. Database-only backups and JSON
+exports do not contain it, but full filesystem backups do; protect those backups
+and the server data directory. HTTP Redmine URLs do not encrypt keys in transit.
+Deleting a connection does not revoke its key at Redmine. Private instance URLs
+are permitted: any Kanso browser session can direct the server to call private
+addresses. Give browser access only to trusted humans.
+
 ## Supported versions
 
 Only the newest `v*` release and the matching container image tag receive

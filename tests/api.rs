@@ -419,6 +419,287 @@ async fn github_auth_requires_a_human_session_csrf_and_no_store() {
 }
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
+#[tokio::test]
+async fn redmine_connections_require_browser_and_hide_keys() {
+    let app = TestApp::new();
+    let cookie = app.login().await;
+    let agent = app.create_token(&cookie, "redmine-agent", "agent").await;
+    let human = app.create_token(&cookie, "redmine-human", "human").await;
+    let path = "/api/integration/redmine";
+    let body =
+        json!({"name":"Fixture", "url":"http://example.test/redmine", "key":"public-test-key"});
+    for token in [agent["token"].as_str(), human["token"].as_str()] {
+        assert_eq!(
+            app.request(Method::POST, path, Some(body.clone()), None, token, None)
+                .await
+                .status,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            app.get(path, None, token).await.status,
+            StatusCode::FORBIDDEN
+        );
+        for suffix in ["account", "discover"] {
+            assert_eq!(
+                app.get(&format!("{path}/unknown/{suffix}"), None, token)
+                    .await
+                    .status,
+                StatusCode::FORBIDDEN
+            );
+        }
+    }
+    assert_eq!(
+        app.request(
+            Method::POST,
+            path,
+            Some(body.clone()),
+            Some(&cookie),
+            None,
+            Some("https://evil.example")
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    let created = app.cookie_post(path, Some(body), &cookie).await;
+    assert_eq!(created.status, StatusCode::OK);
+    assert!(!created.body.to_string().contains("public-test-key"));
+    let listed = app.get(path, Some(&cookie), None).await;
+    assert_eq!(listed.status, StatusCode::OK);
+    assert!(!listed.body.to_string().contains("public-test-key"));
+    assert_eq!(listed.body[0]["name"], "Fixture");
+    let id = created.body["id"].as_str().unwrap();
+    let item_path = format!("{path}/{id}");
+    let edit = json!({"name":"Renamed", "url":"http://example.test/redmine", "key":null});
+    assert_eq!(
+        app.request(
+            Method::PUT,
+            &item_path,
+            Some(edit.clone()),
+            Some(&cookie),
+            None,
+            Some("https://evil.example")
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.request(
+            Method::DELETE,
+            &item_path,
+            None,
+            Some(&cookie),
+            None,
+            Some("https://evil.example")
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.request(
+            Method::PUT,
+            &item_path,
+            Some(edit),
+            Some(&cookie),
+            None,
+            Some(ORIGIN)
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.request(
+            Method::PUT,
+            &item_path,
+            Some(json!({"name":"Renamed","url":"http://other.test","key":null})),
+            Some(&cookie),
+            None,
+            Some(ORIGIN)
+        )
+        .await
+        .status,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        app.request(
+            Method::PUT,
+            &item_path,
+            Some(
+                json!({"name":"Renamed","url":"http://other.test","key":"another-public-test-key"})
+            ),
+            Some(&cookie),
+            None,
+            Some(ORIGIN)
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.cookie_delete(&item_path, &cookie).await.status,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(app.get(path, Some(&cookie), None).await.body, json!([]));
+}
+
+#[tokio::test]
+async fn redmine_import_deduplicates_across_connections_and_invalidates_preview() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = std::thread::spawn(move || {
+        for _ in 0..11 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0; 4096];
+            let len = stream.read(&mut buf).unwrap();
+            let request = String::from_utf8_lossy(&buf[..len]);
+            let body = if request.starts_with("GET /users/current.json") {
+                r#"{"user":{"id":9,"login":"fixture","firstname":"Test","lastname":"User"}}"#
+            } else if request.starts_with("GET /projects.json?") {
+                r#"{"projects":[{"id":4,"name":"Atlas"}],"total_count":1,"offset":0,"limit":100}"#
+            } else {
+                assert!(request.starts_with("GET /issues.json?"));
+                r#"{"issues":[{"id":42,"subject":"Original","description":"Upstream text","status":{"is_closed":false}}],"total_count":1,"offset":0,"limit":100}"#
+            };
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        }
+    });
+    let app = TestApp::new();
+    let cookie = app.login().await;
+    let project = app.create_project(&cookie, "RDM").await;
+    let project_id = project["id"].as_str().unwrap();
+    let base = format!("http://{address}");
+    let a = app
+        .cookie_post(
+            "/api/integration/redmine",
+            Some(json!({"name":"One","url":base,"key":"public-test-key"})),
+            &cookie,
+        )
+        .await;
+    let b = app
+        .cookie_post(
+            "/api/integration/redmine",
+            Some(json!({"name":"Two","url":format!("{base}/"),"key":"another-public-key"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(a.status, StatusCode::OK);
+    assert_eq!(b.status, StatusCode::OK);
+    let a = a.body["id"].as_str().unwrap();
+    let b = b.body["id"].as_str().unwrap();
+    let account = app
+        .get(
+            &format!("/api/integration/redmine/{a}/account"),
+            Some(&cookie),
+            None,
+        )
+        .await;
+    assert_eq!(account.body["name"], "Test User");
+    let discovered = app
+        .get(
+            &format!("/api/integration/redmine/{a}/discover"),
+            Some(&cookie),
+            None,
+        )
+        .await;
+    assert_eq!(discovered.body["account"]["id"], 9);
+    assert_eq!(discovered.body["projects"][0]["name"], "Atlas");
+    let preview = |source: &str| json!({"project_id":project_id,"provider":"redmine","source":source,"filters":{"state":"open"}});
+    let confirm = |source: &str, id: &Value| json!({"project_id":project_id,"provider":"redmine","source":source,"preview_id":id,"selected":[0]});
+    let first = app
+        .cookie_post("/api/imports/preview", Some(preview(a)), &cookie)
+        .await;
+    assert_eq!(first.status, StatusCode::OK);
+    let created = app
+        .cookie_post(
+            "/api/imports/confirm",
+            Some(confirm(a, &first.body["preview_id"])),
+            &cookie,
+        )
+        .await;
+    assert_eq!(created.body[0]["status"], "created");
+    let reference = created.body[0]["reference"].as_str().unwrap();
+    let task = app
+        .get(&format!("/api/tasks/{reference}"), Some(&cookie), None)
+        .await
+        .body;
+    assert_eq!(task["status"], "backlog");
+    assert_eq!(task["priority"], "normal");
+    assert!(task["description"]
+        .as_str()
+        .unwrap()
+        .contains("Upstream text"));
+    app.cookie_patch(
+        &format!("/api/tasks/{reference}"),
+        json!({"title":"Local edit"}),
+        &cookie,
+    )
+    .await;
+    app.cookie_post(&format!("/api/tasks/{reference}/archive"), None, &cookie)
+        .await;
+    let second = app
+        .cookie_post("/api/imports/preview", Some(preview(b)), &cookie)
+        .await;
+    assert_eq!(second.body["candidates"][0]["existing"], reference);
+    let skipped = app
+        .cookie_post(
+            "/api/imports/confirm",
+            Some(confirm(b, &second.body["preview_id"])),
+            &cookie,
+        )
+        .await;
+    assert_eq!(skipped.body[0]["status"], "skipped");
+    assert_eq!(
+        app.get(&format!("/api/tasks/{reference}"), Some(&cookie), None)
+            .await
+            .body["title"],
+        "Local edit"
+    );
+    let pending = app
+        .cookie_post("/api/imports/preview", Some(preview(b)), &cookie)
+        .await;
+    let replaced = app
+        .request(
+            Method::PUT,
+            &format!("/api/integration/redmine/{b}"),
+            Some(json!({"name":"Rotated","url":base,"key":"rotated-public-key"})),
+            Some(&cookie),
+            None,
+            Some(ORIGIN),
+        )
+        .await;
+    assert_eq!(replaced.status, StatusCode::OK);
+    let rejected = app
+        .cookie_post(
+            "/api/imports/confirm",
+            Some(confirm(b, &pending.body["preview_id"])),
+            &cookie,
+        )
+        .await;
+    assert_eq!(rejected.status, StatusCode::CONFLICT);
+    let pending = app
+        .cookie_post("/api/imports/preview", Some(preview(b)), &cookie)
+        .await;
+    assert_eq!(
+        app.cookie_delete(&format!("/api/integration/redmine/{b}"), &cookie)
+            .await
+            .status,
+        StatusCode::NO_CONTENT
+    );
+    let rejected = app
+        .cookie_post(
+            "/api/imports/confirm",
+            Some(confirm(b, &pending.body["preview_id"])),
+            &cookie,
+        )
+        .await;
+    assert_eq!(rejected.status, StatusCode::CONFLICT);
+    upstream.join().unwrap();
+}
+
 struct TempDir {
     path: PathBuf,
 }

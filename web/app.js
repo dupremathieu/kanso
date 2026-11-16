@@ -16,6 +16,7 @@ import { createBoardView } from "./board.js?v={{VERSION}}";
 import { Panel } from "./panel.js?v={{VERSION}}";
 import { renderImports } from "./imports.js?v={{VERSION}}";
 import { githubSettings } from "./github-settings.js?v={{VERSION}}";
+import { redmineSettings } from "./redmine-settings.js?v={{VERSION}}";
 import {
   openCardForm,
   openProjectForm,
@@ -1504,6 +1505,10 @@ async function renderSettingsIntegration(token) {
     githubSettings(() => state.routeToken === token && page.isConnected),
     page.children[1] || null
   );
+  const mountRedmine = () => page.insertBefore(
+    redmineSettings(() => state.routeToken === token && page.isConnected),
+    page.children[1] || null
+  );
   state.dom.pageRegion.replaceChildren(
     el("div", { class: "page-loading" }, [
       el("span", { class: "spinner", "aria-hidden": "true" }),
@@ -1533,6 +1538,7 @@ async function renderSettingsIntegration(token) {
       );
       state.dom.pageRegion.replaceChildren(page);
       mountGithub();
+      mountRedmine();
       return;
     }
     const info = response.openchamber;
@@ -1669,6 +1675,7 @@ async function renderSettingsIntegration(token) {
     page.append(form);
     state.dom.pageRegion.replaceChildren(page);
     mountGithub();
+    mountRedmine();
   } catch (error) {
     if (state.routeToken !== token) return;
     if (error.status !== 401) showLoadError(error);

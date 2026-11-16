@@ -6,6 +6,8 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 pub mod github;
+pub mod redmine;
+pub mod redmine_provider;
 
 /// All metadata is public and must never contain credentials.
 #[derive(Clone, Debug, Serialize)]
@@ -54,6 +56,10 @@ pub trait Provider: Send + Sync {
     fn failure_message(&self) -> &'static str {
         "Provider preview failed"
     }
+    /// A changing source revision invalidates a preview without exposing credentials.
+    fn source_revision(&self, _source: &str) -> Option<String> {
+        None
+    }
     /// Resolve public sources for a project while holding the database lock.
     /// Must not perform network or subprocess I/O.
     fn project_info(
@@ -77,6 +83,7 @@ pub(crate) struct Preview {
     pub project: String,
     pub provider: String,
     pub source: String,
+    pub source_revision: Option<String>,
     pub label_id: Option<String>,
     pub candidates: Vec<Candidate>,
 }

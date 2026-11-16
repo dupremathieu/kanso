@@ -12,6 +12,7 @@ mod github_auth;
 pub mod ids;
 pub mod importer;
 pub mod rank;
+pub mod redmine_connections;
 pub mod secret_memory;
 pub mod server;
 pub mod skill;

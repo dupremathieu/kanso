@@ -33,7 +33,7 @@ globalThis.fetch = async (path, options) => {
   if (failure) return { ok: false, status: 503, headers: { get: () => "application/json" }, json: async () => ({ error: { code: "provider_error", message: "Provider unavailable" } }) };
   if (labelFailure && path === "/api/labels") return { ok: false, status: 503, headers: { get: () => "application/json" }, json: async () => ({ error: { code: "label_error", message: "Labels unavailable" } }) };
   const projectId = new URL(path, "https://test.invalid").searchParams.get("project_id");
-  const body = path === "/api/labels" ? labels : path.includes("/imports/providers") ? (providersByProject?.[projectId] || providers) : path.endsWith("preview")
+  const body = path.endsWith("/discover") ? { account: { name: "Fixture User" }, projects: [{ id: 4, name: "Atlas" }] } : path === "/api/labels" ? labels : path.includes("/imports/providers") ? (providersByProject?.[projectId] || providers) : path.endsWith("preview")
     ? { preview_id: "snapshot", candidates: [{ index: 0, valid: true, existing: null, candidate: { title: "<img onerror=alert(1)>", kind: "issue", source_url: "https://example.org/a" } }] }
     : [{ index: 0, status: "created", reference: "TST-1", message: null }];
   return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => body };
@@ -126,6 +126,17 @@ assert.ok(find(region, (n) => n.textContent === "Provider unavailable"));
 failure = false;
 await renderImports(region, [], () => true, () => {});
 assert.ok(find(region, (n) => n.textContent.includes("Create an active project")));
+providersByProject = null;
+providers = [{ id: "redmine", name: "Redmine", sources: [{ id: "connection", name: "Fixture" }], filters: ["project", "assignee", "state", "watched", "operator"].map((id) => ({ id, label: id })) }];
+await renderImports(region, [{ id: "project", key: "TST", name: "Test" }], () => true, () => {});
+const rmProject = find(region, (n) => n["aria-label"] === "Destination project");
+const rmProvider = find(region, (n) => n["aria-label"] === "Provider");
+const rmSource = find(region, (n) => n["aria-label"] === "Source");
+rmProject.value = "project"; await rmProject.fire("change");
+rmProvider.value = "redmine"; await rmProvider.fire("change");
+rmSource.value = "connection"; await rmSource.fire("change");
+await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+assert.ok(find(region, (n) => n.textContent === "Atlas"));
 providers = [{ id: "github", name: "GitHub", sources: [
   { id: "owner/repo|issues", name: "owner/repo — Issues" },
   { id: "owner/repo|review", name: "owner/repo — PRs to review" }

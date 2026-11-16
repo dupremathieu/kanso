@@ -21,7 +21,7 @@ browser ──https──> nginx (host, TLS) ──http──> kanso (rootless c
 | Container image | `${KANSO_IMAGE}` |
 | Service user / home | `${KANSO_USER}` / `${KANSO_HOME}` |
 | Loopback port | `127.0.0.1:${KANSO_PORT}` |
-| Data | `${KANSO_HOME}/data` → `/data`, SQLite, `backups/`, and optional GitHub CLI credentials |
+| Data | `${KANSO_HOME}/data` → `/data`, SQLite, `backups/`, optional GitHub CLI credentials and Redmine connection keys |
 | Deployment values | `deploy/deploy.env` (gitignored; `deploy/deploy.env.example` committed) |
 | Quadlet source | `deploy/kanso.container.in` (rendered to `deploy/out/kanso.container`) |
 | Network unit | `deploy/kanso.network` (static) |
@@ -318,6 +318,16 @@ operator-managed; browser reconnect is disabled in that case. Both the shared
 account and its potentially unencrypted credential affect every Kanso project.
 
 ## 6. Backups
+
+The SQLite-only backup does not include browser-managed Redmine connections.
+Their personal API keys live as plaintext in the mode-0600
+`redmine-connections.json` beside the database. Full filesystem backups include
+that file: restrict access and encrypt those backups. A SQLite-only restore
+does not restore the backed-up connections: replacing only `kanso.db` leaves
+`redmine-connections.json` untouched. If it is absent, connections must be
+reconfigured. Deleting a connection does not revoke its Redmine API key. Use
+HTTPS for Redmine whenever possible, because HTTP
+exposes keys in transit.
 
 The timer runs daily at 03:15 with a 10-minute randomized delay and
 `Persistent=true` (a missed run catches up after boot). The service waits for

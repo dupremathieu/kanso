@@ -118,6 +118,11 @@ export const api = {
   logout: () => request("/api/auth/logout", { method: "POST" }),
 
   integration: () => request("/api/integration").catch(() => null),
+  redmineConnections: () => request("/api/integration/redmine"),
+  redmineDiscover: (id) => request(`/api/integration/redmine/${encodeURIComponent(id)}/discover`),
+  redmineAccount: (id) => request(`/api/integration/redmine/${encodeURIComponent(id)}/account`),
+  saveRedmineConnection: (id, body) => request(`/api/integration/redmine${id ? `/${encodeURIComponent(id)}` : ""}`, { method: id ? "PUT" : "POST", body, secret: true }),
+  deleteRedmineConnection: (id) => request(`/api/integration/redmine/${encodeURIComponent(id)}`, { method: "DELETE" }),
   githubStatus: () => request("/api/github/status", { secret: true }),
   githubRefresh: () => request("/api/github/status", { method: "POST", secret: true }),
   githubProgress: () => request("/api/github/login", { secret: true }),

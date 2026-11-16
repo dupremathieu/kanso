@@ -40,6 +40,7 @@ pub(crate) mod model;
 mod models;
 mod projects;
 mod recall;
+mod redmine;
 mod reply;
 pub(crate) mod secret;
 mod session;
@@ -394,6 +395,22 @@ pub fn routes() -> Router<AppState> {
         .route("/api/imports/providers", get(imports::providers))
         .route("/api/imports/preview", post(imports::preview))
         .route("/api/imports/confirm", post(imports::confirm))
+        .route(
+            "/api/integration/redmine",
+            get(redmine::list).post(redmine::create),
+        )
+        .route(
+            "/api/integration/redmine/{id}",
+            axum::routing::put(redmine::update).delete(redmine::delete),
+        )
+        .route(
+            "/api/integration/redmine/{id}/discover",
+            get(redmine::discover),
+        )
+        .route(
+            "/api/integration/redmine/{id}/account",
+            get(redmine::account),
+        )
         .route("/api/auth/login", post(session::login))
         .route("/api/auth/logout", post(session::logout))
         .route("/api/me", get(session::me))

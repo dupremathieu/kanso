@@ -176,7 +176,7 @@ async fn active_project(state: &AppState, project: String) -> Result<bool, ApiEr
 
 /// Reserve before any async work, so even a later invalid request invalidates
 /// the caller's old preview and an older request cannot finish over a newer one.
-fn reserve_preview(state: &AppState, auth: &Auth) -> Result<String, ApiError> {
+fn reserve_preview(state: &AppState, auth: &Auth, provider: &str) -> Result<String, ApiError> {
     let preview_id = ids::base64_url(&ids::random_bytes::<32>()?);
     let owner = owner(auth);
     let mut cache = state
@@ -200,8 +200,9 @@ fn reserve_preview(state: &AppState, auth: &Auth) -> Result<String, ApiError> {
             created: Instant::now(),
             owner,
             project: String::new(),
-            provider: String::new(),
+            provider: provider.to_owned(),
             source: String::new(),
+            source_revision: None,
             label_id: None,
             candidates: Vec::new(),
         },
@@ -254,7 +255,7 @@ pub async fn preview(
     ApiJson(request): ApiJson<PreviewRequest>,
 ) -> Result<Json<PreviewResponse>, ApiError> {
     require_human(&auth.0)?;
-    let preview_id = reserve_preview(&state, &auth)?;
+    let preview_id = reserve_preview(&state, &auth, &request.provider)?;
     if !active_project(&state, request.project_id.clone()).await? {
         return Err(ApiError::validation(
             "Destination project is missing or archived",
@@ -285,10 +286,15 @@ pub async fn preview(
     {
         return Err(ApiError::validation("Invalid provider source or filters"));
     }
+    let revision = provider.source_revision(&request.source);
+    if request.provider == crate::importer::redmine_provider::ID && revision.is_none() {
+        return Err(ApiError::conflict("Connection no longer available"));
+    }
     let source = request.source.clone();
     let filters = request.filters;
     let failure_message = provider.failure_message();
-    let candidates = tokio::task::spawn_blocking(move || provider.preview(&source, &filters))
+    let worker = provider.clone();
+    let candidates = tokio::task::spawn_blocking(move || worker.preview(&source, &filters))
         .await
         .map_err(|_| ApiError::service_unavailable("provider_error", "Provider preview failed"))?
         .map_err(|_| ApiError::service_unavailable("provider_error", failure_message))?;
@@ -346,6 +352,11 @@ pub async fn preview(
         .previews
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+    if provider.source_revision(&request.source) != revision {
+        return Err(ApiError::conflict(
+            "Connection changed; request a new preview",
+        ));
+    }
     let snapshot = cache
         .get_mut(&preview_id)
         .filter(|p| p.created.elapsed() < TTL)
@@ -353,6 +364,7 @@ pub async fn preview(
     snapshot.project = request.project_id;
     snapshot.provider = request.provider;
     snapshot.source = request.source;
+    snapshot.source_revision = revision;
     snapshot.label_id = request.label_id;
     snapshot.candidates = candidates;
     Ok(Json(PreviewResponse {
@@ -509,6 +521,11 @@ pub async fn confirm(
     ApiJson(request): ApiJson<ConfirmRequest>,
 ) -> Result<Json<Vec<Outcome>>, ApiError> {
     require_human(&auth.0)?;
+    let _connection_guard = if request.provider == crate::importer::redmine_provider::ID {
+        Some(state.redmine_settings_lock.lock().await)
+    } else {
+        None
+    };
     let preview = {
         let mut cache = state
             .imports
@@ -551,6 +568,11 @@ pub async fn confirm(
         .find(|p| p.info().id == preview.provider)
         .cloned()
         .ok_or_else(|| ApiError::conflict("Provider is no longer available"))?;
+    if adapter.source_revision(&preview.source) != preview.source_revision {
+        return Err(ApiError::conflict(
+            "Connection changed; request a new preview",
+        ));
+    }
     let mut outcomes = Vec::new();
     for index in request.selected {
         let candidate = preview.candidates[index].clone();
@@ -715,7 +737,7 @@ mod tests {
         let mut first_id = String::new();
         for index in 0..=MAX_PREVIEWS {
             auth.0.session_id = Some(format!("session-{index}"));
-            let id = reserve_preview(&state, &auth).unwrap();
+            let id = reserve_preview(&state, &auth, "fixture").unwrap();
             if index == 0 {
                 first_id = id.clone();
                 state
@@ -755,6 +777,7 @@ mod tests {
                 project: "p".into(),
                 provider: "fixture".into(),
                 source: "s".into(),
+                source_revision: None,
                 label_id: None,
                 candidates: Vec::new(),
             },

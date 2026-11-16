@@ -33,6 +33,8 @@ pub struct AppState {
     pub login_limiter: Arc<crate::auth::LoginLimiter>,
     pub events: Arc<EventBus>,
     pub imports: Arc<crate::importer::Registry>,
+    pub redmine: Arc<crate::redmine_connections::Connections>,
+    pub redmine_settings_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) github_auth: Arc<crate::github_auth::Manager>,
     /// Shared so settings changes take effect for all handlers and the poller.
     pub openchamber: Arc<Mutex<Option<Arc<crate::adapter::openchamber::OpenChamber>>>>,
@@ -65,17 +67,25 @@ impl AppState {
     ) -> Self {
         let db_path = db.path().to_path_buf();
         let secrets = db.secrets();
+        let redmine = Arc::new(crate::redmine_connections::Connections::empty(
+            db_path.with_file_name("redmine-connections.json"),
+        ));
         Self {
             db,
             secrets,
-            db_path,
+            db_path: db_path.clone(),
             web_dir,
             auth: Arc::new(auth),
             login_limiter: Arc::new(crate::auth::LoginLimiter::default()),
             events: Arc::new(EventBus::new(heartbeat)),
-            imports: Arc::new(crate::importer::Registry::new(vec![Arc::new(
-                crate::importer::github::GitHub,
-            )])),
+            redmine: redmine.clone(),
+            redmine_settings_lock: Arc::new(tokio::sync::Mutex::new(())),
+            imports: Arc::new(crate::importer::Registry::new(vec![
+                Arc::new(crate::importer::github::GitHub),
+                Arc::new(crate::importer::redmine_provider::Redmine {
+                    connections: redmine,
+                }),
+            ])),
             github_auth: Arc::new(crate::github_auth::Manager::default()),
             openchamber: Arc::new(Mutex::new(None)),
             openchamber_settings_lock: Arc::new(tokio::sync::Mutex::new(())),
