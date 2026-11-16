@@ -1127,14 +1127,14 @@ async fn import_label_scope_snapshot_and_retries() {
         .await;
     assert_eq!(preview.status, StatusCode::OK);
     let confirm = import_confirm_request(a_id, &preview.body["preview_id"]);
+    // Confirmation rejects unknown fields; it cannot override the snapshot label.
     let mut forged = confirm.clone();
     forged["label_id"] = json!("other");
-    assert_eq!(
-        app.cookie_post("/api/imports/confirm", Some(forged), &cookie)
-            .await
-            .status,
-        StatusCode::BAD_REQUEST
-    );
+    let rejected = app
+        .cookie_post("/api/imports/confirm", Some(forged), &cookie)
+        .await;
+    assert_eq!(rejected.status, StatusCode::BAD_REQUEST);
+    assert_eq!(rejected.code(), "validation");
     let mut events = app.state.events.subscribe();
     let outcome = app
         .cookie_post("/api/imports/confirm", Some(confirm.clone()), &cookie)
@@ -1142,6 +1142,7 @@ async fn import_label_scope_snapshot_and_retries() {
     assert_eq!(outcome.body[0]["status"], "created");
     let event = events.try_recv().unwrap();
     assert_eq!(event.kind, "task.created");
+    // The created task carries the label selected in the preview snapshot.
     assert_eq!(event.data["task"]["labels"][0]["id"], label);
     assert_eq!(
         app.db_i64("SELECT count(*) FROM task_labels", vec![]).await,
@@ -1212,6 +1213,23 @@ async fn import_does_not_relabel_existing_unlabeled_task() {
     let cookie = app.login().await;
     let project = app.create_project(&cookie, "ILC").await;
     let id = project["id"].as_str().unwrap();
+    let mut null_label = import_preview_request(id, "");
+    null_label["label_id"] = serde_json::Value::Null;
+    let null_preview = app
+        .cookie_post("/api/imports/preview", Some(null_label), &cookie)
+        .await;
+    assert_eq!(null_preview.status, StatusCode::OK);
+    let null_confirm = import_confirm_request(id, &null_preview.body["preview_id"]);
+    assert_eq!(
+        app.cookie_post("/api/imports/confirm", Some(null_confirm), &cookie)
+            .await
+            .body[0]["status"],
+        "created"
+    );
+    assert_eq!(
+        app.db_i64("SELECT count(*) FROM task_labels", vec![]).await,
+        0
+    );
     let preview = app
         .cookie_post(
             "/api/imports/preview",
@@ -1224,7 +1242,7 @@ async fn import_does_not_relabel_existing_unlabeled_task() {
         app.cookie_post("/api/imports/confirm", Some(confirm), &cookie)
             .await
             .body[0]["status"],
-        "created"
+        "skipped"
     );
     assert_eq!(
         app.db_i64("SELECT count(*) FROM task_labels", vec![]).await,

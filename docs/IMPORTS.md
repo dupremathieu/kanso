@@ -173,13 +173,15 @@ for mutations. Device material is returned only to the starting session.
      "project_id": "existing-project-uuid",
      "provider": "provider-id",
      "source": "source-id",
+     "label_id": "existing-label-uuid",
      "filters": {"query": "assigned to me"}
    }
    ```
 
-   It returns `preview_id` and a `candidates` array. Each item has an `index`,
-   normalized `candidate`, `valid` flag, and an `existing` local task reference
-   or `null`. The normalized candidate contains `identity`, `kind`, `title`,
+   `label_id` is optional; omit it or set it to `null` for no label.
+   The preview response contains `preview_id` and a `candidates` array. Each
+   item has an `index`, normalized `candidate`, `valid` flag, and an `existing`
+   local task reference or `null`. The normalized candidate contains `identity`, `kind`, `title`,
    `description`, and `source_url`. When source content cannot be copied due to
    its size, `invalid_reason` explains why the item is ineligible; the item is
    not silently truncated or imported. Previewing never creates cards.
