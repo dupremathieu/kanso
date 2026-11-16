@@ -19,6 +19,14 @@ The human approved this complete specification on 2026-11-16.
   the behavior, capture a non-secret screenshot, and provide a disposable local
   manual-test setup. Final verification and PR creation belong to the coordinator.
 
+## Screenshot
+
+![Imports preview with a batch label selected](screenshots/kanso-36/import-label-desktop.png)
+
+The screenshot uses a disposable local server and synthetic browser fixture data.
+The browser test writes `imports-desktop.png` to `KANSO_IMPORTS_SCREENSHOTS`;
+the captured file is copied here under the name above.
+
 ## Disposable local manual test
 
 After building with `cargo build --bin kanso`, start a loopback-only instance
