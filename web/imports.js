@@ -151,8 +151,9 @@ export async function renderImports(region, projects, current, navigate) {
         api.labels().then((labels) => ({ labels }), (failure) => ({ failure }))
       ]);
       if (!current() || version !== discoveryVersion) return;
+      // A missing scope flag must not expose a label as global.
       label.replaceChildren(el("option", { value: "", text: t("imports.noLabel") }), ...(labelResult.labels || [])
-        .filter((item) => item.is_global !== false || (item.project_ids || []).includes(project.value))
+        .filter((item) => item.is_global === true || (item.project_ids || []).includes(project.value))
         .map((item) => el("option", { value: item.id, text: item.name })));
       providers = scoped;
       discovering = false;
