@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{ApiError, ApiJson, Auth};
+use super::{ApiError, ApiJson, ApiQuery, Auth};
 use crate::{auth::IdentityKind, redmine_connections::ConnectionInfo, server::AppState};
 
 fn browser(auth: &Auth) -> Result<(), ApiError> {
@@ -36,6 +36,11 @@ pub struct Input {
 pub struct Discovery {
     account: crate::importer::redmine::Account,
     projects: Vec<crate::importer::redmine::Project>,
+}
+
+#[derive(Deserialize)]
+pub struct DiscoveryQuery {
+    project_id: Option<String>,
 }
 
 pub async fn account(
@@ -69,6 +74,7 @@ pub async fn discover(
     State(state): State<AppState>,
     auth: Auth,
     Path(id): Path<String>,
+    ApiQuery(query): ApiQuery<DiscoveryQuery>,
 ) -> Result<Json<Discovery>, ApiError> {
     browser(&auth)?;
     let connection = state
@@ -76,7 +82,7 @@ pub async fn discover(
         .get(&id)
         .ok_or_else(|| ApiError::validation("connection not found"))?;
     let revision = connection.revision;
-    let discovery = tokio::task::spawn_blocking(move || {
+    let mut discovery = tokio::task::spawn_blocking(move || {
         Ok::<_, crate::importer::ProviderError>(Discovery {
             account: connection.client.current_user()?,
             projects: connection.client.projects()?,
@@ -85,8 +91,35 @@ pub async fn discover(
     .await
     .map_err(|_| ApiError::service_unavailable("provider_error", "Redmine discovery failed"))?
     .map_err(|_| ApiError::service_unavailable("provider_error", "Redmine discovery failed"))?;
+    let _guard = state.redmine_settings_lock.lock().await;
     if !state.redmine.revision_matches(&id, &revision) {
         return Err(ApiError::conflict("Connection changed; retry discovery"));
+    }
+    if let Some(reference) = query.project_id {
+        let connections = state.redmine.list();
+        let preferred = state
+            .db
+            .call(move |db| {
+                let Some(project) = super::projects::project_by_ref(db, &reference)? else {
+                    return Ok(None);
+                };
+                if project.archived_at.is_some() {
+                    return Ok(None);
+                }
+                Ok(Some(super::redmine_projects::rows(
+                    db,
+                    &project.id,
+                    &connections,
+                )?))
+            })
+            .await?
+            .ok_or_else(|| ApiError::not_found("active project not found"))?;
+        let ids: std::collections::HashSet<u64> = preferred
+            .into_iter()
+            .filter(|a| a.connection_id == id)
+            .map(|a| a.redmine_project_id as u64)
+            .collect();
+        discovery.projects.sort_by_key(|p| !ids.contains(&p.id));
     }
     Ok(Json(discovery))
 }
@@ -131,6 +164,7 @@ async fn save(
     .await
     .map_err(|_| ApiError::internal("could not save Redmine connection"))?
     .map_err(connection_error)?;
+    super::redmine_projects::prune(&state).await?;
     // Invalidate pending previews, including reservations whose upstream fetch is in flight.
     state
         .imports
@@ -149,10 +183,13 @@ pub async fn delete(
     browser(&auth)?;
     let _guard = state.redmine_settings_lock.lock().await;
     let connections = state.redmine.clone();
-    tokio::task::spawn_blocking(move || connections.delete(&id))
+    let result = tokio::task::spawn_blocking(move || connections.delete(&id))
         .await
-        .map_err(|_| ApiError::internal("could not delete Redmine connection"))?
-        .map_err(connection_error)?;
+        .map_err(|_| ApiError::internal("could not delete Redmine connection"))?;
+    if result.is_ok() || result == Err("connection not found") {
+        super::redmine_projects::prune(&state).await?;
+    }
+    result.map_err(connection_error)?;
     state
         .imports
         .previews

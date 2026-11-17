@@ -1055,6 +1055,374 @@ impl kanso::importer::Provider for GithubFixture {
 }
 
 #[tokio::test]
+async fn redmine_project_preferences_are_scoped_and_follow_connection_lifecycle() {
+    use std::io::{Read, Write};
+    async fn stored(app: &TestApp, id: &str) -> i64 {
+        let id = id.to_owned();
+        app.state
+            .db
+            .call(move |db| {
+                Ok(db.query_row(
+                    "SELECT count(*) FROM redmine_projects WHERE connection_id=?1",
+                    [id],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap()
+    }
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = std::thread::spawn(move || {
+        for _ in 0..10 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0; 4096];
+            let len = stream.read(&mut buf).unwrap();
+            let request = String::from_utf8_lossy(&buf[..len]);
+            let body = if request.contains("/users/current.json") {
+                r#"{"user":{"id":9,"login":"fixture","firstname":"Test","lastname":"User"}}"#
+            } else {
+                assert!(request.contains("/projects.json?status=1&"));
+                r#"{"projects":[{"id":4,"name":"Atlas"},{"id":5,"name":"Beacon"},{"id":6,"name":"Cedar"},{"id":7,"name":"Delta"}],"total_count":4,"offset":0,"limit":100}"#
+            };
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        }
+    });
+    let app = TestApp::new();
+    let cookie = app.login().await;
+    let first = app.create_project(&cookie, "RPA").await;
+    let second = app.create_project(&cookie, "RPB").await;
+    let p1 = first["id"].as_str().unwrap();
+    let p2 = second["id"].as_str().unwrap();
+    let base = format!("http://{address}");
+    let a = app
+        .cookie_post(
+            "/api/integration/redmine",
+            Some(json!({"name":"One","url":base,"key":"public-test-key"})),
+            &cookie,
+        )
+        .await
+        .body;
+    let b = app
+        .cookie_post(
+            "/api/integration/redmine",
+            Some(json!({"name":"Two","url":base,"key":"public-test-key"})),
+            &cookie,
+        )
+        .await
+        .body;
+    let a = a["id"].as_str().unwrap();
+    let b = b["id"].as_str().unwrap();
+    let malformed = app
+        .get(
+            &format!("/api/integration/redmine/{a}/discover?project_id=x&project_id=y"),
+            Some(&cookie),
+            None,
+        )
+        .await;
+    assert_eq!(malformed.status, StatusCode::BAD_REQUEST);
+    assert!(malformed.body["error"]["message"].is_string());
+    let path = format!("/api/projects/{p1}/redmine-projects");
+    let put = |body: Value| {
+        app.request(
+            Method::PUT,
+            &path,
+            Some(body),
+            Some(&cookie),
+            None,
+            Some(ORIGIN),
+        )
+    };
+    let associations = json!([
+        {"connection_id":a,"redmine_project_id":7},
+        {"connection_id":a,"redmine_project_id":5},
+        {"connection_id":a,"redmine_project_id":99},
+        {"connection_id":b,"redmine_project_id":6}
+    ]);
+    assert_eq!(put(associations.clone()).await.status, StatusCode::OK);
+    assert_eq!(
+        put(json!([{"connection_id":a,"redmine_project_id":5,"connection_url":"https://old-server.example"}])).await.status,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        app.get(&path, Some(&cookie), None)
+            .await
+            .body
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    assert_eq!(
+        app.get(
+            &format!("/api/projects/{p2}/redmine-projects"),
+            Some(&cookie),
+            None
+        )
+        .await
+        .body,
+        json!([])
+    );
+    for invalid in [
+        json!([{"connection_id":a,"redmine_project_id":0}]),
+        json!([{"connection_id":a,"redmine_project_id":-1}]),
+        json!([{"connection_id":"missing","redmine_project_id":5}]),
+        json!([{"connection_id":a,"redmine_project_id":5},{"connection_id":a,"redmine_project_id":5}]),
+        json!([{"connection_id":a,"redmine_project_id":"5"}]),
+        json!([{"connection_id":a,"redmine_project_id":5,"unexpected":true}]),
+        json!((1..=1001)
+            .map(|id| json!({"connection_id":a,"redmine_project_id":id}))
+            .collect::<Vec<_>>()),
+    ] {
+        assert_eq!(put(invalid).await.status, StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(
+        app.get(&path, Some(&cookie), None)
+            .await
+            .body
+            .as_array()
+            .unwrap()
+            .len(),
+        4,
+        "invalid replacements must be atomic"
+    );
+    let agent = app
+        .create_token(&cookie, "redmine-project-agent", "agent")
+        .await;
+    assert_eq!(
+        app.get(&path, None, agent["token"].as_str()).await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.request(
+            Method::PUT,
+            &path,
+            Some(json!([])),
+            None,
+            agent["token"].as_str(),
+            None
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.request(
+            Method::PUT,
+            &path,
+            Some(json!([])),
+            Some(&cookie),
+            None,
+            None
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.request(
+            Method::PUT,
+            "/api/projects/missing/redmine-projects",
+            Some(json!([])),
+            Some(&cookie),
+            None,
+            Some(ORIGIN)
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND
+    );
+    let ids = |body: &Value| {
+        body["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["id"].as_u64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    for (connection, scope, expected) in [
+        (a, format!("?project_id={p1}"), vec![5, 7, 4, 6]),
+        (a, format!("?project_id={p2}"), vec![4, 5, 6, 7]),
+        (b, format!("?project_id={p1}"), vec![6, 4, 5, 7]),
+        (a, String::new(), vec![4, 5, 6, 7]),
+    ] {
+        let result = app
+            .get(
+                &format!("/api/integration/redmine/{connection}/discover{scope}"),
+                Some(&cookie),
+                None,
+            )
+            .await;
+        assert_eq!(result.status, StatusCode::OK);
+        assert_eq!(ids(&result.body), expected);
+    }
+    // Saving again preserves an association that discovery did not return.
+    assert_eq!(put(associations.clone()).await.status, StatusCode::OK);
+    assert!(app
+        .get(&path, Some(&cookie), None)
+        .await
+        .body
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["redmine_project_id"] == 99));
+    // Canonically identical URL + rename/key rotation preserves associations.
+    assert_eq!(
+        app.request(
+            Method::PUT,
+            &format!("/api/integration/redmine/{a}"),
+            Some(json!({"name":"Renamed","url":format!("{base}/"),"key":"rotated-public-key"})),
+            Some(&cookie),
+            None,
+            Some(ORIGIN)
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.get(&path, Some(&cookie), None)
+            .await
+            .body
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    // Failed URL edits do not erase associations.
+    assert_eq!(
+        app.request(
+            Method::PUT,
+            &format!("/api/integration/redmine/{a}"),
+            Some(json!({"name":"Renamed","url":format!("{base}/other")})),
+            Some(&cookie),
+            None,
+            Some(ORIGIN)
+        )
+        .await
+        .status,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        app.get(&path, Some(&cookie), None)
+            .await
+            .body
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    assert_eq!(
+        app.request(
+            Method::PUT,
+            &format!("/api/integration/redmine/{a}"),
+            Some(
+                json!({"name":"Renamed","url":format!("{base}/other"),"key":"changed-server-key"})
+            ),
+            Some(&cookie),
+            None,
+            Some(ORIGIN)
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.get(&path, Some(&cookie), None).await.body,
+        json!([{"connection_id":b,"redmine_project_id":6}])
+    );
+    assert_eq!(
+        stored(&app, a).await,
+        0,
+        "URL change must delete stored associations"
+    );
+    // Simulate a crash between file persistence and DB cleanup. Old URL rows
+    // must remain hidden and a same-URL retry must actually remove them.
+    let (pid, aid, old_url) = (p1.to_owned(), a.to_owned(), base.clone());
+    app.state
+        .db
+        .call(move |db| {
+            db.execute(
+                "INSERT INTO redmine_projects VALUES (?1,?2,?3,5)",
+                rusqlite::params![pid, aid, old_url],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(stored(&app, a).await, 1);
+    assert_eq!(
+        app.get(&path, Some(&cookie), None).await.body,
+        json!([{"connection_id":b,"redmine_project_id":6}])
+    );
+    assert_eq!(
+        app.request(
+            Method::PUT,
+            &format!("/api/integration/redmine/{a}"),
+            Some(json!({"name":"Renamed","url":format!("{base}/other")})),
+            Some(&cookie),
+            None,
+            Some(ORIGIN)
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    assert_eq!(stored(&app, a).await, 0, "same-URL save retries cleanup");
+    assert_eq!(
+        app.cookie_delete(&format!("/api/integration/redmine/{b}"), &cookie)
+            .await
+            .status,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(app.get(&path, Some(&cookie), None).await.body, json!([]));
+    assert_eq!(
+        stored(&app, b).await,
+        0,
+        "connection deletion must delete stored associations"
+    );
+    // A delete retry still cleans orphan rows even though the file no longer
+    // contains the connection.
+    let (pid, bid, old_url) = (p1.to_owned(), b.to_owned(), base.clone());
+    app.state
+        .db
+        .call(move |db| {
+            db.execute(
+                "INSERT INTO redmine_projects VALUES (?1,?2,?3,6)",
+                rusqlite::params![pid, bid, old_url],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        app.cookie_delete(&format!("/api/integration/redmine/{b}"), &cookie)
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        stored(&app, b).await,
+        0,
+        "delete retries cleanup after the connection is gone"
+    );
+    // Clearing configuration restores the original discovery order.
+    assert_eq!(put(json!([])).await.status, StatusCode::OK);
+    let discovery = app
+        .get(
+            &format!("/api/integration/redmine/{a}/discover?project_id={p1}"),
+            Some(&cookie),
+            None,
+        )
+        .await;
+    assert_eq!(ids(&discovery.body), vec![4, 5, 6, 7]);
+    app.cookie_post(&format!("/api/projects/{p1}/archive"), None, &cookie)
+        .await;
+    assert_eq!(put(json!([])).await.status, StatusCode::NOT_FOUND);
+    upstream.join().unwrap();
+}
+
+#[tokio::test]
 async fn github_configuration_discovery_and_identity_are_project_scoped() {
     let production = TestApp::new();
     let cookie = production.login().await;

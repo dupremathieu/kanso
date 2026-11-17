@@ -41,6 +41,7 @@ mod models;
 mod projects;
 mod recall;
 mod redmine;
+mod redmine_projects;
 mod reply;
 pub(crate) mod secret;
 mod session;
@@ -439,6 +440,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/api/projects/{id}/github-repositories",
             get(github_repositories::list).put(github_repositories::replace),
+        )
+        .route(
+            "/api/projects/{id}/redmine-projects",
+            get(redmine_projects::list).put(redmine_projects::replace),
         )
         .route("/api/tasks", get(tasks::list).post(tasks::create))
         .route(
