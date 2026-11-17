@@ -354,7 +354,7 @@ impl Client {
         loop {
             let offset = projects.len();
             let page: Page<Projects> = self.get(
-                &format!("/projects.json?status=1%7C5&limit=100&offset={offset}"),
+                &format!("/projects.json?status=1&limit=100&offset={offset}"),
                 deadline,
                 &mut budget,
             )?;
@@ -715,6 +715,30 @@ mod tests {
             target.accept().unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock
         );
+    }
+
+    #[test]
+    fn project_discovery_requests_only_active_projects() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = [0; 4096];
+            let len = stream.read(&mut bytes).unwrap();
+            let request = String::from_utf8_lossy(&bytes[..len]);
+            assert!(
+                request.starts_with("GET /projects.json?status=1&limit=100&offset=0 "),
+                "{request}"
+            );
+            let body =
+                r#"{"projects":[{"id":4,"name":"Atlas"}],"total_count":1,"offset":0,"limit":100}"#;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        });
+        let client = Client::new(&format!("http://{address}"), "public-test-key").unwrap();
+        let projects = client.projects().unwrap();
+        server.join().unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].name, "Atlas");
     }
 
     #[test]
