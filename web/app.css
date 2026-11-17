@@ -257,6 +257,19 @@ a {
   color: var(--text);
 }
 
+.label-filter {
+  max-width: 160px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.label-filter:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
 .global-toggle {
   display: inline-flex;
   align-items: center;
