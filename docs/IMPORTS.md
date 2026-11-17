@@ -87,6 +87,15 @@ manual and read-only: there is no sync, monitoring, notification, automatic
 transition, or GitHub write. Comments, reviews, attachments and Actions logs
 are not copied.
 
+New cards are titled with the GitHub record type and number: `Issue #547 - …`,
+`Review PR #1547 - …`, or `Follow PR #4756 - …`. The original title follows the
+prefix. The prefix applies only to cards created by an import; repeat imports
+skip existing cards and never rename them. Titles that would exceed the
+200-character limit only after prefixing are reported individually as invalid;
+source titles are never truncated.
+
+![GitHub issue preview with type and number prefixes](screenshots/kanso-44/preview-desktop.png)
+
 GitHub connection management is global under **Settings → Integration**; all
 projects and people share the same active account. “Me” is not the current
 Kanso user. Connect opens GitHub's device flow and reconnect requires explicit

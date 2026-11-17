@@ -39,6 +39,20 @@ invalidation, and provider errors. Set `KANSO_IMPORTS_SCREENSHOTS=dist/review`
 to retain desktop/mobile screenshots. The mocked browser flow complements,
 but does not replace, the Rust API tests.
 
+`node scripts/test-github-import-prefix.mjs` covers the GitHub-specific title
+prefix end to end with the production adapter, a private fake `gh`, and
+synthetic issues and pull requests. It verifies `Issue #…`, `Review PR #…`, and
+`Follow PR #…` on preview and imported cards on desktop; the mobile viewport
+repeats the layout/overflow check.
+
+```sh
+cargo build --locked
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/test-github-import-prefix.mjs
+```
+
+Set `KANSO_GITHUB_IMPORT_SCREENSHOTS=docs/screenshots/kanso-44` to regenerate
+the committed preview, desktop-board and mobile-board evidence.
+
 `tests/ui.rs` covers the shell, every module, `i18n/en.js`,
 `vendor/marked.min.js`, content types and the deep-link fallback.
 `tests/sbom.rs` keeps `web/package.json`, `web/package-lock.json` and the
