@@ -213,6 +213,12 @@ On one card, verify in order:
    review and Blocker are shown; tick **Show all columns** to see everything.
 2. Search filters cards by reference, title, label and claim name. The search
    works in both project and global views.
+   On a project board, select a label beside search to show only matching cards;
+   search and the label filter combine. Counts update and drag-and-drop is
+   disabled until filters are cleared. The selection survives reload in the
+   same browser session, but clears when switching projects.
+   Deleting the selected label clears the filter, and renaming it updates the
+   selector and cards.
 3. **Settings → Projects**: create, edit (`PATCH` persists all agent fields),
    and archive a project. Archived projects are listed separately.
 4. **Settings → Tokens**: create a Human and an Agent token; the plaintext is
@@ -429,6 +435,18 @@ It checks loading an existing template, saving, clearing and persistence, and
 captures the desktop/mobile screenshots linked from `KANSO-30-SPEC.md`. The
 script uses disposable data under `~/.cache/tmp/opencode` and modifies no
 other board. Omit `KANSO_LABEL_SCREENSHOTS` to skip the captures.
+
+For the project label filter, build and run the disposable browser check:
+
+```sh
+cargo build --locked
+PLAYWRIGHT_MODULE=/path/to/tooling/node_modules/playwright/index.mjs \
+KANSO_FILTER_SCREENSHOT=docs/screenshots/kanso-34/filter.png \
+node scripts/test-label-filter-ui.mjs
+```
+
+Omit `KANSO_FILTER_SCREENSHOT` to skip the capture. The script checks search,
+counts, drag prevention, live label changes, persistence and project switching.
 
 1. Create a label from a card’s **New label** action with a template such as
    `Focus on tests for {{ref}} — {{title}} in {{project}}.` Save it and reopen

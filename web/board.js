@@ -259,7 +259,7 @@ function renderColumn(project, status, cards, options, mode) {
     body.append(
       el("p", {
         class: "column-empty",
-        text: options.search ? t("board.noMatches") : t("board.emptyColumn")
+        text: options.search.trim() || options.labelId ? t("board.noMatches") : t("board.emptyColumn")
       })
     );
   }
@@ -329,7 +329,7 @@ export function createBoardView(root, handlers) {
         : null;
     scroll.replaceChildren();
     scroll.dataset.mode = mode;
-    scroll.classList.toggle("filtered", Boolean(current.options.search.trim()));
+    scroll.classList.toggle("filtered", Boolean(current.options.search.trim() || current.options.labelId));
 
     for (const board of current.boards) {
       const project = board.project;
@@ -341,7 +341,10 @@ export function createBoardView(root, handlers) {
         if (mode === "global" && !current.options.showAll && !ACTIVE_STATUSES.includes(status)) {
           continue;
         }
-        const cards = (columns[status] || []).filter((card) => matchesSearch(card, current.options.search));
+        const cards = (columns[status] || []).filter((card) =>
+          matchesSearch(card, current.options.search) &&
+          (!current.options.labelId || (card.labels || []).some((label) => label.id === current.options.labelId))
+        );
         columnNodes.append(
           renderColumn(project, status, cards, { ...current.options, ...handlers }, mode)
         );
@@ -601,8 +604,8 @@ export function createBoardView(root, handlers) {
     if (drag) return;
     // A filtered column's DOM no longer contains hidden neighbours, so a drop
     // could send a non-adjacent before/after pair. Use "Move to…" while
-    // searching instead.
-    if (current.options.search.trim()) return;
+    // search or label filtering is active instead.
+    if (current.options.search.trim() || current.options.labelId) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
     const card = event.target.closest ? event.target.closest(".card") : null;
     if (!card || !scroll.contains(card)) return;

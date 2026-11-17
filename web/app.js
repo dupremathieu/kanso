@@ -36,6 +36,27 @@ const LS = {
   panelCollapsed: "kanso.panel.collapsed",
   notifications: "kanso.notifications"
 };
+const LABEL_FILTER_KEY = "kanso.labelFilter";
+let labelFilterCache = null;
+
+function readLabelFilter() {
+  if (labelFilterCache) return labelFilterCache;
+  try {
+    labelFilterCache = JSON.parse(sessionStorage.getItem(LABEL_FILTER_KEY)) || {};
+  } catch {
+    labelFilterCache = {};
+  }
+  return labelFilterCache;
+}
+
+function saveLabelFilter(projectId, labelId) {
+  labelFilterCache = { projectId, labelId };
+  try {
+    sessionStorage.setItem(LABEL_FILTER_KEY, JSON.stringify(labelFilterCache));
+  } catch {
+    // The filter still works for this page when browser storage is unavailable.
+  }
+}
 
 const EVENT_TYPES = [
   "task.created",
@@ -312,6 +333,11 @@ function buildShell() {
     placeholder: t("board.searchPlaceholder"),
     "aria-label": t("board.searchPlaceholder")
   });
+  const labelFilter = el("select", {
+    class: "label-filter",
+    "aria-label": t("board.labelFilter"),
+    hidden: true
+  });
 
   const newCard = el(
     "button",
@@ -361,6 +387,7 @@ function buildShell() {
     el("nav", { class: "tabs", "aria-label": t("app.name") }, [tabBoard, tabGlobal, tabInbox]),
     el("div", { class: "topbar-right" }, [
       el("div", { class: "search-box" }, [icon("search", { size: 15 }), search]),
+      labelFilter,
       globalToggle,
       newCard,
       state.me?.scope === "human"
@@ -427,6 +454,7 @@ function buildShell() {
     tabInbox,
     inboxBadge,
     search,
+    labelFilter,
     newCard,
     notifications,
     help,
@@ -452,6 +480,10 @@ function buildShell() {
   search.addEventListener("input", () => {
     state.search = search.value;
     if (isBoardRoute()) renderBoardView();
+  });
+  labelFilter.addEventListener("change", () => {
+    saveLabelFilter(state.currentProjectId, labelFilter.value);
+    renderBoardView();
   });
   search.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
@@ -528,6 +560,7 @@ function renderChrome() {
   dom.globalToggle.hidden = route.name !== "global";
   dom.search.value = state.search;
   dom.search.closest(".search-box").hidden = !isBoardRoute();
+  dom.labelFilter.hidden = !["project", "task"].includes(route.name);
 
   const count = state.inbox.length;
   dom.inboxBadge.hidden = count === 0;
@@ -720,6 +753,10 @@ async function renderProject(key, taskRoute, token) {
     }
     state.boardReady = true;
     state.boards = [board];
+    const savedFilter = readLabelFilter();
+    if (savedFilter.projectId && savedFilter.projectId !== board.project.id) {
+      saveLabelFilter(board.project.id, "");
+    }
     state.currentProjectKey = board.project.key;
     state.currentProjectId = board.project.id;
     localStorage.setItem(LS.lastProject, board.project.key);
@@ -814,9 +851,36 @@ function renderBoardView() {
   state.dom.boardRegion.hidden = false;
   state.dom.pageRegion.hidden = true;
   const mode = state.route.name === "global" ? "global" : "project";
+  let labelId = "";
+  if (mode === "project") {
+    const projectId = state.currentProjectId;
+    const available = new Map(
+      state.labels
+        .filter((label) => label.is_global || (label.project_ids || []).includes(projectId))
+        .map((label) => [label.id, label])
+    );
+    for (const cards of Object.values(state.boards[0]?.columns || {})) {
+      for (const card of cards) {
+        for (const label of card.labels || []) available.set(label.id, label);
+      }
+    }
+    const saved = readLabelFilter();
+    labelId = saved.projectId === projectId ? saved.labelId || "" : "";
+    if (labelId && !available.has(labelId)) {
+      labelId = "";
+      saveLabelFilter(projectId, "");
+    }
+    const labels = [...available.values()].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+    state.dom.labelFilter.replaceChildren(
+      el("option", { value: "", text: t("board.allLabels") }),
+      ...labels.map((label) => el("option", { value: label.id, text: label.name }))
+    );
+    state.dom.labelFilter.value = labelId;
+  }
   state.boardView.render(state.boards, {
     mode,
     search: state.search,
+    labelId,
     showAll: state.showAll,
     selectedRef: state.selectedRef
   });
@@ -2554,9 +2618,21 @@ function applyEvent(type, data) {
     }
     if (type === "label.updated" && label) {
       state.labels = state.labels.map((item) => (item.id === label.id ? label : item));
+      for (const board of state.boards) {
+        for (const cards of Object.values(board.columns || {})) {
+          for (const card of cards) {
+            card.labels = (card.labels || []).map((item) => item.id === label.id ? label : item);
+          }
+        }
+      }
     }
     if (type === "label.deleted" && label) {
       state.labels = state.labels.filter((item) => item.id !== label.id);
+      for (const board of state.boards) {
+        for (const cards of Object.values(board.columns || {})) {
+          for (const card of cards) card.labels = (card.labels || []).filter((item) => item.id !== label.id);
+        }
+      }
     }
     state.labels.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
     if (state.panel) state.panel.setLabels(state.labels);
