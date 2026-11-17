@@ -529,14 +529,16 @@ node scripts/test-recall-ui.mjs
 
 It exercises the instruction form, failed delivery and explicit retry.
 
-## Redmine importer verification (KANSO-3)
+## Redmine importer and project preferences verification (KANSO-3, KANSO-46)
 
 The Redmine UI browser check starts a disposable Kanso server and a synthetic,
 read-only local Redmine HTTP fixture with a public test key. It exercises
-browser connection settings, project discovery, typed controls, preview,
-confirmation and invalidation. It overwrites the screenshots under
-`docs/screenshots/kanso-3/` on each run. Backend coverage lives in the Redmine
-importer and connection modules and `tests/api.rs`.
+browser connection settings, preferred project persistence, unavailable IDs,
+priority ordering, destination changes, mobile settings layout, typed controls,
+preview, confirmation and invalidation. It overwrites the screenshots under
+`docs/screenshots/kanso-46/` on each run; `docs/screenshots/kanso-3/` retains the
+original importer acceptance captures. Backend coverage lives in the Redmine
+importer and connection modules, migration tests and `tests/api.rs`.
 
 ```sh
 cargo fmt --check

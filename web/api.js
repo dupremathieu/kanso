@@ -119,7 +119,9 @@ export const api = {
 
   integration: () => request("/api/integration").catch(() => null),
   redmineConnections: () => request("/api/integration/redmine"),
-  redmineDiscover: (id) => request(`/api/integration/redmine/${encodeURIComponent(id)}/discover`),
+  redmineDiscover: (id, projectId) => request(`/api/integration/redmine/${encodeURIComponent(id)}/discover${query({ project_id: projectId })}`),
+  redmineProjects: (id) => request(`/api/projects/${enc(id)}/redmine-projects`),
+  saveRedmineProjects: (id, associations) => request(`/api/projects/${enc(id)}/redmine-projects`, { method: "PUT", body: associations }),
   redmineAccount: (id) => request(`/api/integration/redmine/${encodeURIComponent(id)}/account`),
   saveRedmineConnection: (id, body) => request(`/api/integration/redmine${id ? `/${encodeURIComponent(id)}` : ""}`, { method: id ? "PUT" : "POST", body, secret: true }),
   deleteRedmineConnection: (id) => request(`/api/integration/redmine/${encodeURIComponent(id)}`, { method: "DELETE" }),

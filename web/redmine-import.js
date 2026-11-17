@@ -30,7 +30,7 @@ export function redmineImportControls(invalidate) {
   root.append(account, field(t("redmine.project"), project), field(t("redmine.assignee"), assignee), userField,
     field(t("redmine.state"), state), field(t("redmine.watched"), watched), operatorField, error);
   change();
-  async function load(id) {
+  async function load(id, projectId) {
     const next = ++version;
     ready = false;
     project.replaceChildren(option("", t("redmine.loading")));
@@ -39,7 +39,7 @@ export function redmineImportControls(invalidate) {
     invalidate();
     if (!id) return;
     try {
-      const data = await api.redmineDiscover(id);
+      const data = await api.redmineDiscover(id, projectId);
       if (next !== version) return;
       project.replaceChildren(option("all", t("redmine.allProjects")), ...data.projects.map((p) => option(String(p.id), p.name)));
       account.textContent = t("redmine.account", { name: data.account.name });
