@@ -37,6 +37,28 @@ Choose an existing active Kanso project, Redmine and a connection. Discover
 accessible active projects, then select all or one project. Closed projects are
 not offered. Selecting one project excludes its subprojects. The default is open
 issues and all assignees, without a watcher restriction.
+
+In **Settings → Projects → Redmine projects**, select a connection and check
+preferred Redmine projects, then **Save Redmine projects**. A Kanso project can
+have multiple associations across multiple connections; saving applies to all
+connections. In Imports, **All accessible projects** remains first and selected
+by default, followed by associated projects and then other accessible projects.
+Both groups retain Redmine's order. Changing destination project or connection
+refreshes these priorities. Associations are preferences, never restrictions:
+they do not change preview/import filtering. With no associations, behavior is
+unchanged.
+
+Closed or inaccessible projects are not offered in imports, but their
+associations survive until removed; settings show unavailable saved IDs so they
+can be explicitly unchecked. Deleting a connection or changing its server URL
+clears its associations. Renaming it or rotating its key preserves them.
+Associations are included in database backups, not JSON exports, and contain
+no credentials.
+
+![Project settings with preferred Redmine projects](screenshots/kanso-46/project-settings.png)
+
+![Associated projects listed first in Redmine import](screenshots/kanso-46/import-priorities.png)
+
 Choose a numeric Redmine user ID or **Me** for assignee, and optionally
 **Watched by me**. AND/OR applies only to these two restricted predicates;
 project and state always apply to both. When either predicate is unrestricted,
@@ -53,12 +75,6 @@ aliases or different schemes cannot be automatically recognized as the same
 instance. A changed or deleted connection invalidates its pending previews.
 Searches are bounded to 200 issues and 2 MiB; errors or oversized searches
 require narrower filters instead of returning an incomplete list.
-
-![Redmine connection settings with a synthetic connection](screenshots/kanso-3/settings-desktop.png)
-
-![Redmine project, assignee, state and watched filters](screenshots/kanso-3/filters-desktop.png)
-
-![Redmine issue preview from the synthetic fixture](screenshots/kanso-3/preview-desktop.png)
 
 ## GitHub
 
@@ -273,3 +289,20 @@ Humans can inspect or replace a project's complete repository configuration via
 objects such as `{"repository":"owner/repo","issues":true,"review":false,"follow":true}`.
 The list is replaced atomically; repository names are unique case-insensitively.
 An empty list unlinks all repositories. Cookie requests require CSRF protection.
+
+Humans can inspect or atomically replace Redmine project associations via
+`GET` or `PUT /api/projects/<id>/redmine-projects`. PUT accepts an array of
+`{"connection_id":"existing-connection-uuid","redmine_project_id":123}` objects
+(maximum 1000, positive numeric IDs, no duplicate pairs). An optional
+`connection_url` per object must match the connection's canonical URL, otherwise
+the request returns `409`; the settings UI supplies this to prevent stale edits
+from binding IDs to a changed server. GET returns IDs, not names or credentials.
+An empty list removes all associations. Mutation requires an active destination
+project and cookie CSRF protection. IDs need not be currently accessible, so
+saving other associations does not erase temporarily unavailable projects.
+
+`GET /api/integration/redmine/<connection-id>/discover?project_id=<kanso-project-id>`
+returns the same accessible active projects, ordered with that destination's
+associations first. Omitting `project_id` preserves upstream order. Discovery
+requires a browser session; an explicit missing/archived destination returns
+`404`. Remote failures retain the existing safe errors, never a partial list.

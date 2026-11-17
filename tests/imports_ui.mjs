@@ -3,12 +3,13 @@ import assert from "node:assert/strict";
 
 class FakeNode {
   constructor(tag = "#text") { this.tag = tag; this.children = []; this.listeners = {}; this.value = ""; this.textContent = ""; this.disabled = false; this.checked = false; this.dataset = {}; this.style = {}; }
-  append(...children) { for (const child of children) child.parent = this; this.children.push(...children); }
+  append(...children) { for (const child of children) child.parent = this; this.children.push(...children); if (this.tag === "select" && !this.value && this.children.length) this.value = this.children[0].value; }
   replaceChildren(...children) { this.children = []; if (this.tag === "select") this.value = ""; this.append(...children); }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); }
   replaceWith(node) { if (this.parent) { this.parent.children = this.parent.children.map((child) => child === this ? node : child); node.parent = this.parent; } }
   setAttribute(key, value) { this[key] = value; }
   addEventListener(name, fn) { (this.listeners[name] ||= []).push(fn); }
+  querySelectorAll(tag) { return this.children.flatMap((child) => [ ...(child.tag === tag ? [child] : []), ...child.querySelectorAll(tag) ]); }
   async fire(name) { for (const fn of this.listeners[name] || []) await fn({ preventDefault() {} }); }
 }
 globalThis.Node = FakeNode;
@@ -33,7 +34,7 @@ globalThis.fetch = async (path, options) => {
   if (failure) return { ok: false, status: 503, headers: { get: () => "application/json" }, json: async () => ({ error: { code: "provider_error", message: "Provider unavailable" } }) };
   if (labelFailure && path === "/api/labels") return { ok: false, status: 503, headers: { get: () => "application/json" }, json: async () => ({ error: { code: "label_error", message: "Labels unavailable" } }) };
   const projectId = new URL(path, "https://test.invalid").searchParams.get("project_id");
-  const body = path.endsWith("/discover") ? { account: { name: "Fixture User" }, projects: [{ id: 4, name: "Atlas" }] } : path === "/api/labels" ? labels : path.includes("/imports/providers") ? (providersByProject?.[projectId] || providers) : path.endsWith("preview")
+  const body = path.includes("/discover") ? { account: { name: "Fixture User" }, projects: projectId === "project2" ? [{ id: 4, name: "Atlas" }, { id: 5, name: "Beacon" }] : [{ id: 5, name: "Beacon" }, { id: 4, name: "Atlas" }] } : path === "/api/labels" ? labels : path.includes("/imports/providers") ? (providersByProject?.[projectId] || providers) : path.endsWith("preview")
     ? { preview_id: "snapshot", candidates: [{ index: 0, valid: true, existing: null, candidate: { title: "<img onerror=alert(1)>", kind: "issue", source_url: "https://example.org/a" } }] }
     : [{ index: 0, status: "created", reference: "TST-1", message: null }];
   return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => body };
@@ -137,6 +138,12 @@ rmProvider.value = "redmine"; await rmProvider.fire("change");
 rmSource.value = "connection"; await rmSource.fire("change");
 await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
 assert.ok(find(region, (n) => n.textContent === "Atlas"));
+assert.equal(calls.at(-1).path, "/api/integration/redmine/connection/discover?project_id=project");
+assert.deepEqual(find(region, (n) => n["aria-label"] === "Redmine project").children.map((n) => n.value), ["all", "5", "4"]);
+rmProject.value = "project2"; await rmProject.fire("change");
+assert.equal(rmSource.value, "connection");
+assert.equal(calls.at(-1).path, "/api/integration/redmine/connection/discover?project_id=project2");
+assert.deepEqual(find(region, (n) => n["aria-label"] === "Redmine project").children.map((n) => n.value), ["all", "4", "5"]);
 providers = [{ id: "github", name: "GitHub", sources: [
   { id: "owner/repo|issues", name: "owner/repo — Issues" },
   { id: "owner/repo|review", name: "owner/repo — PRs to review" }
@@ -203,3 +210,75 @@ assert.equal(ghSource.children.length, 1);
 assert.equal(ghCategory.children.length, 1);
 assert.equal(ghPreview.disabled, true);
 console.log("imports UI workflow passed");
+
+const { renderRedmineProjects } = await import("../web/redmine-projects.js");
+let savedAssociations = [{ connection_id: "one", redmine_project_id: 99 }, { connection_id: "two", redmine_project_id: 8 }];
+let savedPayload;
+let discoveryFailure = false;
+let pendingDiscovery;
+let reappeared = false;
+globalThis.fetch = async (path, options) => {
+  let body;
+  if (path === "/api/integration/redmine") body = [
+    { id: "one", name: "First server", url: "https://one.example" },
+    { id: "two", name: "Second server", url: "https://two.example" }
+  ];
+  else if (path.endsWith("/redmine-projects")) {
+    if (options.method === "PUT") { savedPayload = JSON.parse(options.body); savedAssociations = savedPayload; }
+    body = savedAssociations;
+  } else {
+    if (pendingDiscovery) await pendingDiscovery;
+    if (discoveryFailure) return { ok: false, status: 503, headers: { get: () => "application/json" }, json: async () => ({ error: { message: "Discovery failed" } }) };
+    body = { projects: path.includes("/one/") ? [{ id: 4, name: "<unsafe name>" }, { id: 5, name: "Beacon" }, ...(reappeared ? [{ id: 99, name: "Reappeared project" }] : [])] : [{ id: 8, name: "Other server project" }] };
+  }
+  return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => body };
+};
+const settingsPanel = new FakeNode("div");
+await renderRedmineProjects(settingsPanel, "project", () => true, () => {});
+const settingConnection = find(settingsPanel, (n) => n["aria-label"] === "Redmine connection");
+const settingSave = find(settingsPanel, (n) => n.textContent === "Save Redmine projects");
+const unavailable = find(settingsPanel, (n) => n["aria-label"] === "Project #99 (currently unavailable)");
+assert.equal(unavailable.checked, true);
+assert.ok(find(settingsPanel, (n) => n["aria-label"] === "<unsafe name>"), "remote names are rendered as text");
+const beacon = find(settingsPanel, (n) => n["aria-label"] === "Beacon");
+beacon.checked = true; await beacon.fire("change");
+settingConnection.value = "two"; await settingConnection.fire("change");
+assert.equal(find(settingsPanel, (n) => n["aria-label"] === "Other server project").checked, true);
+await settingSave.fire("click");
+assert.deepEqual(savedPayload, [
+  { connection_id: "one", redmine_project_id: 99, connection_url: "https://one.example" },
+  { connection_id: "one", redmine_project_id: 5, connection_url: "https://one.example" },
+  { connection_id: "two", redmine_project_id: 8, connection_url: "https://two.example" }
+]);
+settingConnection.value = "one"; await settingConnection.fire("change");
+assert.equal(find(settingsPanel, (n) => n["aria-label"] === "Beacon").checked, true);
+reappeared = true;
+await settingConnection.fire("change");
+assert.equal(find(settingsPanel, (n) => n["aria-label"] === "Reappeared project").checked, true);
+reappeared = false;
+await settingConnection.fire("change");
+const stale = find(settingsPanel, (n) => n["aria-label"] === "Project #99 (currently unavailable)");
+stale.checked = false; await stale.fire("change");
+await settingSave.fire("click");
+assert.ok(!savedPayload.some((a) => a.redmine_project_id === 99));
+// A discovery failure cannot silently erase the existing selection.
+discoveryFailure = true;
+settingConnection.value = "two"; await settingConnection.fire("change");
+assert.ok(find(settingsPanel, (n) => n.textContent === "Discovery failed"));
+await settingSave.fire("click");
+assert.ok(savedPayload.some((a) => a.connection_id === "two" && a.redmine_project_id === 8));
+discoveryFailure = false;
+// Only the latest connection's results may render; save is disabled in flight.
+let releaseDiscovery;
+pendingDiscovery = new Promise((resolve) => { releaseDiscovery = resolve; });
+settingConnection.value = "one";
+const oldLoad = settingConnection.fire("change");
+assert.equal(settingSave.disabled, true);
+settingConnection.value = "two";
+const newLoad = settingConnection.fire("change");
+releaseDiscovery();
+await Promise.all([oldLoad, newLoad]);
+pendingDiscovery = null;
+assert.ok(find(settingsPanel, (n) => n["aria-label"] === "Other server project"));
+assert.equal(find(settingsPanel, (n) => n["aria-label"] === "Beacon"), undefined);
+console.log("Redmine project settings workflow passed");

@@ -17,6 +17,7 @@ import { Panel } from "./panel.js?v={{VERSION}}";
 import { renderImports } from "./imports.js?v={{VERSION}}";
 import { githubSettings } from "./github-settings.js?v={{VERSION}}";
 import { redmineSettings } from "./redmine-settings.js?v={{VERSION}}";
+import { renderRedmineProjects } from "./redmine-projects.js?v={{VERSION}}";
 import {
   openCardForm,
   openProjectForm,
@@ -1246,6 +1247,8 @@ async function renderSettingsProjects(token) {
 function renderProjectRow(project, archived, human, refresh) {
   const actions = [];
   const githubPanel = el("div", { class: "github-repositories" });
+  const redminePanel = el("div", { class: "redmine-projects" });
+  let redmineGeneration = 0;
   let githubGeneration = 0;
   if (human) {
     actions.push(
@@ -1278,6 +1281,15 @@ function renderProjectRow(project, archived, human, refresh) {
         } catch (error) { if (generation === githubGeneration) githubPanel.replaceChildren(el("p", { class: "form-error", role: "alert", text: error.message })); }
       } });
       actions.push(githubToggle);
+      const redmineToggle = el("button", { type: "button", class: "button button-ghost button-small", text: t("redmine.projects"), onClick: async () => {
+        const generation = ++redmineGeneration;
+        if (redminePanel.childNodes.length) { redminePanel.replaceChildren(); return; }
+        redminePanel.replaceChildren(el("p", { text: t("common.loading") }));
+        try {
+          await renderRedmineProjects(redminePanel, project.id, () => generation === redmineGeneration && redminePanel.isConnected, (saving) => { redmineToggle.disabled = saving; });
+        } catch (error) { if (generation === redmineGeneration) redminePanel.replaceChildren(el("p", { class: "form-error", role: "alert", text: error.message })); }
+      } });
+      actions.push(redmineToggle);
       actions.push(
         el(
           "button",
@@ -1322,7 +1334,8 @@ function renderProjectRow(project, archived, human, refresh) {
         ? el("p", { class: "muted settings-row-description", text: project.description })
         : null,
       project.repo_path ? el("code", { class: "settings-row-repo", text: project.repo_path }) : null,
-      githubPanel
+      githubPanel,
+      redminePanel
     ]),
     actions.length ? el("div", { class: "settings-row-actions" }, actions) : null
   ]);

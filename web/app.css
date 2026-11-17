@@ -1632,11 +1632,12 @@ body.resizing-panel * {
   gap: 12px;
 }
 
-.github-repositories:not(:empty) {
+.github-repositories:not(:empty),
+.redmine-projects:not(:empty) {
   margin-top: 16px;
 }
 
-.settings-row:has(.github-repositories:not(:empty)) {
+.settings-row:has(.github-repositories:not(:empty), .redmine-projects:not(:empty)) {
   align-items: flex-start;
 }
 
@@ -1655,6 +1656,14 @@ body.resizing-panel * {
 
 .github-repositories > button {
   margin: 8px 8px 0 0;
+}
+
+.redmine-project-list {
+  display: grid;
+  gap: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+  margin-bottom: 12px;
 }
 
 .notification-switch {

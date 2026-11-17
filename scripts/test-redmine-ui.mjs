@@ -21,8 +21,8 @@ const fixture = createServer((request, response) => {
   } else if (url.pathname === "/redmine/projects.json") {
     const activeOnly = url.searchParams.get("status") === "1";
     const projects = activeOnly
-      ? [{ id: 4, name: "Atlas Platform" }, { id: 5, name: "Beacon Operations" }]
-      : [{ id: 4, name: "Atlas Platform" }, { id: 5, name: "Beacon Operations" }, { id: 6, name: "Closed Archive" }];
+      ? [{ id: 4, name: "Atlas Platform" }, { id: 5, name: "Beacon Operations" }, { id: 7, name: "Cedar Services" }]
+      : [{ id: 4, name: "Atlas Platform" }, { id: 5, name: "Beacon Operations" }, { id: 7, name: "Cedar Services" }, { id: 6, name: "Closed Archive" }];
     data = { projects, total_count: projects.length, offset: 0, limit: 100 };
   } else if (url.pathname === "/redmine/issues.json") {
     data = { issues: [
@@ -80,10 +80,30 @@ try {
   await page.getByText("Team Redmine", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Check account", exact: true }).click();
   await page.getByText("Authenticated Redmine account: Morgan Lee", { exact: true }).waitFor();
-  const screenshotDir = join(root, "docs/screenshots/kanso-3");
+  const screenshotDir = join(root, "docs/screenshots/kanso-46");
   await mkdir(screenshotDir, { recursive: true });
-  await page.screenshot({ path: join(screenshotDir, "settings-desktop.png"),
-    clip: { x: 0, y: 0, width: 1280, height: 695 } });
+  const connections = await (await page.request.get(`${base}/api/integration/redmine`)).json();
+  const connectionId = connections[0].id;
+  const associationsUrl = `${base}/api/projects/${project.id}/redmine-projects`;
+  // A closed/inaccessible association must survive saving the visible choices.
+  assert.equal((await page.request.put(associationsUrl, { headers: { Origin: base },
+    data: [{ connection_id: connectionId, redmine_project_id: 99 }] })).status(), 200);
+  await page.goto(`${base}/settings/projects`);
+  await page.getByRole("button", { name: "Redmine projects", exact: true }).click();
+  await page.getByLabel("Beacon Operations", { exact: true }).check();
+  await page.getByLabel("Project #99 (currently unavailable)", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Project #99 (currently unavailable)", { exact: true }).isChecked(), true);
+  await page.getByRole("button", { name: "Save Redmine projects", exact: true }).click();
+  await page.getByText("Redmine projects saved.", { exact: true }).waitFor();
+  assert.deepEqual((await (await page.request.get(associationsUrl)).json()).map((a) => a.redmine_project_id), [5, 99]);
+  await page.reload();
+  await page.getByRole("button", { name: "Redmine projects", exact: true }).click();
+  await page.getByLabel("Beacon Operations", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Beacon Operations", { exact: true }).isChecked(), true);
+  await page.screenshot({ path: join(screenshotDir, "project-settings.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "mobile settings must not overflow");
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole("button", { name: "Imports", exact: true }).click();
   await page.getByLabel("Destination project", { exact: true }).selectOption(project.id);
   await page.getByLabel("Provider", { exact: true }).selectOption("redmine");
@@ -94,17 +114,35 @@ try {
     .getByLabel("Redmine project", { exact: true })
     .locator("option", { hasText: "Closed Archive" });
   assert.equal(await closedOption.count(), 0, "closed Redmine project must not be selectable");
+  const remoteProject = page.getByLabel("Redmine project", { exact: true });
+  assert.deepEqual(await remoteProject.locator("option").evaluateAll((options) => options.map((o) => o.value)), ["all", "5", "4", "7"]);
+  assert.equal(await remoteProject.inputValue(), "all");
+  await remoteProject.selectOption("5");
+  await page.screenshot({ path: join(screenshotDir, "import-priorities.png"), fullPage: true });
+  const otherProject = await (await page.request.post(`${base}/api/projects`, {
+    headers: { Origin: base }, data: { key: "ALT", name: "Unassociated destination" }
+  })).json();
+  // Reload projects, then changing destination must retain the connection and
+  // recompute ordering without making a second source selection.
+  await page.reload();
+  await page.getByLabel("Destination project", { exact: true }).selectOption(project.id);
+  await page.getByLabel("Provider", { exact: true }).selectOption("redmine");
+  await source.selectOption({ label: "Team Redmine" });
+  await page.getByText("Authenticated Redmine account: Morgan Lee", { exact: true }).waitFor();
+  await page.getByLabel("Destination project", { exact: true }).selectOption(otherProject.id);
+  await page.getByText("Authenticated Redmine account: Morgan Lee", { exact: true }).waitFor();
+  assert.equal(await source.inputValue(), connectionId);
+  assert.deepEqual(await remoteProject.locator("option").evaluateAll((options) => options.map((o) => o.value)), ["all", "4", "5", "7"]);
+  await page.getByLabel("Destination project", { exact: true }).selectOption(project.id);
+  await page.getByText("Authenticated Redmine account: Morgan Lee", { exact: true }).waitFor();
+  assert.deepEqual(await remoteProject.locator("option").evaluateAll((options) => options.map((o) => o.value)), ["all", "5", "4", "7"]);
   await page.getByLabel("Redmine project", { exact: true }).selectOption("4");
   await page.getByLabel("Assignee", { exact: true }).selectOption("me");
   await page.getByLabel("Watched", { exact: true }).selectOption("me");
   await page.getByLabel("Combine assignee and watched", { exact: true }).selectOption("or");
-  await page.screenshot({ path: join(screenshotDir, "filters-desktop.png"), fullPage: true });
   await page.getByRole("button", { name: "Preview", exact: true }).click();
   await page.getByText("Investigate API response latency", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Import selected", exact: true }).scrollIntoViewIfNeeded();
-  // Crop below the fixed header and the partially scrolled preceding field.
-  await page.screenshot({ path: join(screenshotDir, "preview-desktop.png"),
-    clip: { x: 0, y: 84, width: 1280, height: 816 } });
   await page.getByLabel("Select Investigate API response latency", { exact: true }).check();
   await page.getByRole("button", { name: "Import selected", exact: true }).click();
   await page.getByText("RDM-1", { exact: true }).waitFor();
@@ -120,7 +158,7 @@ try {
     runner.once("exit", resolve);
   });
   assert.equal(runnerStatus, 0, "live runner failed against the synthetic fixture");
-  console.log("Redmine browser workflow passed; screenshots saved in docs/screenshots/kanso-3/");
+  console.log("Redmine browser workflow passed; screenshots saved in docs/screenshots/kanso-46/");
 } finally {
   if (browser) await browser.close();
   server.kill("SIGTERM");

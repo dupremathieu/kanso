@@ -144,6 +144,7 @@ export async function renderImports(region, projects, current, navigate) {
     invalidate();
   }
   project.addEventListener("change", async () => {
+    const previousSource = provider.value === "redmine" ? source.value : "";
     discovering = Boolean(project.value);
     const version = ++discoveryVersion;
     providers = [];
@@ -165,12 +166,16 @@ export async function renderImports(region, projects, current, navigate) {
       providers = scoped;
       discovering = false;
       controls();
+      if (redmine && [...source.children].some((option) => option.value === previousSource) && previousSource) {
+        source.value = previousSource;
+        await redmine.load(source.value, project.value);
+      }
       if (labelResult.failure) error.textContent = labelResult.failure.message;
     } catch (failure) { if (current() && version === discoveryVersion) { providers = []; discovering = false; controls(); error.textContent = failure.message; } }
   });
   provider.addEventListener("change", controls);
   label.addEventListener("change", invalidate);
-  source.addEventListener("change", () => { categories(); if (redmine) redmine.load(source.value); invalidate(); });
+  source.addEventListener("change", async () => { categories(); if (redmine) await redmine.load(source.value, project.value); invalidate(); });
   category.addEventListener("change", categoryChanged);
   previewButton.addEventListener("click", async () => {
     invalidate();
