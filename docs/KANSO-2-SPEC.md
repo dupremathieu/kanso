@@ -72,7 +72,10 @@ assignee/reviewer metadata controlling Kanso assignment in this version.
 ## Cards, identity, and lifecycle
 
 - Copy the GitHub title/body and prepend compact context: repository, item
-  number, category, author, and link. Preserve provenance and safe source links.
+  number, category, author, and link. **KANSO-44 amendment:** new cards also
+  prefix the title with the record type and number (`Issue #547 - …`,
+  `Review PR #1547 - …`, `Follow PR #4756 - …`). Preserve provenance and safe
+  source links.
 - Create ordinary active backlog tasks with normal priority, using the existing
   human import creation/activity/event behavior.
 - Do not fetch/copy comment threads, review threads, attachments, or Actions logs.
