@@ -34,9 +34,9 @@ instances are allowed, so any Kanso browser session can direct the server to
 call private addresses. Give browser access only to trusted humans.
 
 Choose an existing active Kanso project, Redmine and a connection. Discover
-accessible projects, then select all or one project. Selecting one project
-excludes its subprojects. The default is open issues and all assignees, without
-a watcher restriction.
+accessible active projects, then select all or one project. Closed projects are
+not offered. Selecting one project excludes its subprojects. The default is open
+issues and all assignees, without a watcher restriction.
 Choose a numeric Redmine user ID or **Me** for assignee, and optionally
 **Watched by me**. AND/OR applies only to these two restricted predicates;
 project and state always apply to both. When either predicate is unrestricted,

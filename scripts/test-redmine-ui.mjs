@@ -19,7 +19,11 @@ const fixture = createServer((request, response) => {
   if (url.pathname === "/redmine/users/current.json") {
     data = { user: { id: 9, login: "fixture", firstname: "Morgan", lastname: "Lee" } };
   } else if (url.pathname === "/redmine/projects.json") {
-    data = { projects: [{ id: 4, name: "Atlas Platform" }, { id: 5, name: "Beacon Operations" }], total_count: 2, offset: 0, limit: 100 };
+    const activeOnly = url.searchParams.get("status") === "1";
+    const projects = activeOnly
+      ? [{ id: 4, name: "Atlas Platform" }, { id: 5, name: "Beacon Operations" }]
+      : [{ id: 4, name: "Atlas Platform" }, { id: 5, name: "Beacon Operations" }, { id: 6, name: "Closed Archive" }];
+    data = { projects, total_count: projects.length, offset: 0, limit: 100 };
   } else if (url.pathname === "/redmine/issues.json") {
     data = { issues: [
       { id: 42, subject: "Investigate API response latency", description: "Review the latest response-time measurements.", project: { id: 4 }, assigned_to: { id: 9 }, status: { is_closed: false } },
@@ -86,6 +90,10 @@ try {
   const source = page.getByLabel("Source", { exact: true });
   await source.selectOption({ label: "Team Redmine" });
   await page.getByText("Authenticated Redmine account: Morgan Lee", { exact: true }).waitFor();
+  const closedOption = page
+    .getByLabel("Redmine project", { exact: true })
+    .locator("option", { hasText: "Closed Archive" });
+  assert.equal(await closedOption.count(), 0, "closed Redmine project must not be selectable");
   await page.getByLabel("Redmine project", { exact: true }).selectOption("4");
   await page.getByLabel("Assignee", { exact: true }).selectOption("me");
   await page.getByLabel("Watched", { exact: true }).selectOption("me");

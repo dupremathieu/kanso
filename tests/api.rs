@@ -559,6 +559,10 @@ async fn redmine_import_deduplicates_across_connections_and_invalidates_preview(
             let body = if request.starts_with("GET /users/current.json") {
                 r#"{"user":{"id":9,"login":"fixture","firstname":"Test","lastname":"User"}}"#
             } else if request.starts_with("GET /projects.json?") {
+                assert!(
+                    request.contains("status=1&limit=100&offset=0 "),
+                    "project discovery must request active projects only: {request}"
+                );
                 r#"{"projects":[{"id":4,"name":"Atlas"}],"total_count":1,"offset":0,"limit":100}"#
             } else {
                 assert!(request.starts_with("GET /issues.json?"));
@@ -606,6 +610,7 @@ async fn redmine_import_deduplicates_across_connections_and_invalidates_preview(
         )
         .await;
     assert_eq!(discovered.body["account"]["id"], 9);
+    assert_eq!(discovered.body["projects"].as_array().unwrap().len(), 1);
     assert_eq!(discovered.body["projects"][0]["name"], "Atlas");
     let preview = |source: &str| json!({"project_id":project_id,"provider":"redmine","source":source,"filters":{"state":"open"}});
     let confirm = |source: &str, id: &Value| json!({"project_id":project_id,"provider":"redmine","source":source,"preview_id":id,"selected":[0]});
