@@ -133,6 +133,18 @@ fn decode<T: serde::de::DeserializeOwned>(data: &[u8]) -> Result<T, ProviderErro
     serde_json::from_slice(data).map_err(|_| ProviderError)
 }
 
+/// New imported cards are named after the GitHub record they come from so a
+/// title alone still says whether it is an issue or a pull request.
+fn title_prefix(category: &str, number: u64) -> Option<String> {
+    let label = match category {
+        "issues" => "Issue",
+        "review" => "Review PR",
+        "follow" => "Follow PR",
+        _ => return None,
+    };
+    Some(format!("{label} #{number} - "))
+}
+
 fn candidate(
     item: Item,
     repository: &str,
@@ -192,7 +204,8 @@ fn candidate(
     let kind = match category {
         "issues" => "Issue",
         "review" => "PR to review",
-        _ => "PR to follow",
+        "follow" => "PR to follow",
+        _ => return Err(ProviderError),
     };
     let url = format!(
         "https://github.com/{repository}/{}/{number}",
@@ -208,13 +221,16 @@ fn candidate(
         item.number
     );
     let body = item.body.unwrap_or_default();
-    let title_invalid = crate::api::tasks::validate_title(&item.title).is_err();
-    let oversized = header.len().saturating_add(body.len()) > 64 * 1024 || item.title.len() > 4096;
-    let title = if item.title.len() > 4096 {
-        format!("GitHub item #{} (title too large)", item.number)
+    let prefix = title_prefix(category, item.number).ok_or(ProviderError)?;
+    let source_title = if item.title.len() > 4096 {
+        "GitHub title too large".to_owned()
     } else {
-        item.title
+        item.title.trim().to_owned()
     };
+    let title = format!("{prefix}{source_title}");
+    let title_invalid = crate::api::tasks::validate_title(&item.title).is_err()
+        || crate::api::tasks::validate_title(&title).is_err();
+    let oversized = header.len().saturating_add(body.len()) > 64 * 1024 || item.title.len() > 4096;
     let description = if oversized {
         "GitHub content exceeds import limits and was not copied.".to_owned()
     } else {
@@ -229,7 +245,10 @@ fn candidate(
         invalid_reason: if oversized {
             Some("GitHub content exceeds import limits; nothing was truncated or imported.".into())
         } else if title_invalid {
-            Some("GitHub title is empty or exceeds the 200-character title limit.".into())
+            Some(
+                "GitHub title is empty or the prefixed title exceeds the 200-character title limit."
+                    .into(),
+            )
         } else {
             None
         },
@@ -383,12 +402,9 @@ mod tests {
         let mut pr = item("pr", "someone");
         pr["pull_request"] = json!({"url":"https://example.com"});
         let items = vec![item("one", "someone"), other, pr];
-        assert_eq!(
-            preview("issues", HashMap::new(), items.clone())
-                .unwrap()
-                .len(),
-            1
-        );
+        let result = preview("issues", HashMap::new(), items.clone()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "Issue #42 - <img onerror=alert(1)>");
         assert_eq!(
             preview(
                 "issues",
@@ -399,16 +415,14 @@ mod tests {
             .len(),
             2
         );
-        assert_eq!(
-            preview(
-                "issues",
-                HashMap::from([("user".into(), "other".into())]),
-                items
-            )
-            .unwrap()[0]
-                .identity,
-            "other"
-        );
+        let result = preview(
+            "issues",
+            HashMap::from([("user".into(), "other".into())]),
+            items,
+        )
+        .unwrap();
+        assert_eq!(result[0].identity, "other");
+        assert_eq!(result[0].title, "Issue #42 - <img onerror=alert(1)>");
     }
     #[test]
     fn review_direct_current_non_draft_and_no_own_author() {
@@ -443,6 +457,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["yes"]
         );
+        assert_eq!(result[0].title, "Review PR #42 - <img onerror=alert(1)>");
         let result = preview(
             "review",
             HashMap::from([("user".into(), "alice".into())]),
@@ -463,6 +478,7 @@ mod tests {
         own["draft"] = json!(true);
         let result = preview("follow", HashMap::new(), vec![own.clone()]).unwrap();
         assert_eq!(result[0].identity, "node-123");
+        assert_eq!(result[0].title, "Follow PR #42 - <img onerror=alert(1)>");
         assert!(result[0].description.contains("octo/repo #42"));
         let mut other = item("node-123", "alice");
         other["requested_reviewers"] = json!([user("me")]);
@@ -556,10 +572,23 @@ mod tests {
         long_body["body"] = json!("x".repeat(70_000));
         let mut long_title = item("title", "other");
         long_title["title"] = json!("x".repeat(201));
+        let mut prefix_limit = item("prefix-limit", "other");
+        prefix_limit["title"] = json!("x".repeat(189));
+        let mut empty_title = item("empty", "other");
+        empty_title["title"] = json!("   ");
+        let mut boundary = item("boundary", "other");
+        boundary["title"] = json!("x".repeat(188));
         let result = preview(
             "issues",
             HashMap::new(),
-            vec![long_body, long_title, item("good", "other")],
+            vec![
+                long_body,
+                long_title,
+                prefix_limit,
+                empty_title,
+                boundary,
+                item("good", "other"),
+            ],
         )
         .unwrap();
         assert!(result[0]
@@ -567,12 +596,17 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains("exceeds"));
-        assert!(result[1]
-            .invalid_reason
-            .as_ref()
-            .unwrap()
-            .contains("200-character"));
-        assert!(result[2].invalid_reason.is_none());
+        for index in [1, 2, 3] {
+            assert!(result[index]
+                .invalid_reason
+                .as_ref()
+                .unwrap()
+                .contains("200-character"));
+        }
+        assert!(result[4].invalid_reason.is_none());
+        assert_eq!(result[4].title, format!("Issue #42 - {}", "x".repeat(188)));
+        assert!(result[5].invalid_reason.is_none());
+        assert_eq!(result[5].title, "Issue #42 - <img onerror=alert(1)>");
         let mut missing = item("missing", "other");
         missing.as_object_mut().unwrap().remove("assignees");
         assert!(preview("issues", HashMap::new(), vec![missing]).is_err());
