@@ -225,7 +225,22 @@ On one card, verify in order:
    and delete presets; duplicate titles ignoring case must fail. Select a preset
    in project and dispatch model fields, verify free text still works, and check
    that changing or deleting a preset does not change a previously copied value.
-   Verify an agent can run `kanso models list --json` but cannot mutate presets.
+    Verify an agent can run `kanso models list --json` but cannot mutate presets.
+
+### Parent project boards
+
+The Chromium check exercises assigning a parent in Settings, switching board
+scope, all seven columns, searching and opening child cards, quick add,
+same-project drag, and live updates on detach/archive.
+
+```bash
+cargo build
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
+  KANSO_PARENT_SCREENSHOT=docs/screenshots/kanso-28/parent-board.png \
+  node scripts/test-parent-projects-ui.mjs
+```
+
+Omit `KANSO_PARENT_SCREENSHOT` to verify without writing an image.
 
 ## 9. Markdown safety
 

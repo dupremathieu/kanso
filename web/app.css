@@ -266,6 +266,10 @@ a {
   white-space: nowrap;
 }
 
+.input.project-scope {
+  width: auto;
+}
+
 .main {
   position: relative;
   flex: 1;

@@ -153,6 +153,7 @@ export const api = {
 
   board: (projectReference) =>
     request(`/api/board${query({ project: projectReference || undefined })}`),
+  parentBoard: (parent) => request(`/api/board${query({ parent })}`),
 
   projectBoard: (reference) => request(`/api/projects/${enc(reference)}/board`),
 

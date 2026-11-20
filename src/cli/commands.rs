@@ -234,6 +234,7 @@ pub fn project(command: ProjectCommand, json_output: bool) -> Result<(), CliErro
             description,
             repo_path,
             color,
+            parent,
         } => {
             let mut body = Map::new();
             body.insert("key".to_owned(), json!(key));
@@ -246,6 +247,9 @@ pub fn project(command: ProjectCommand, json_output: bool) -> Result<(), CliErro
             }
             if let Some(color) = color {
                 body.insert("color".to_owned(), json!(color));
+            }
+            if let Some(parent) = parent {
+                body.insert("parent".to_owned(), json!(parent));
             }
             let response = client.request(
                 Method::Post,
@@ -269,6 +273,14 @@ pub fn project(command: ProjectCommand, json_output: bool) -> Result<(), CliErro
             outln!("id: {}", string(&value, "id"));
             outln!("repo: {}", optional(value["repo_path"].as_str()));
             outln!("color: {}", string(&value, "color"));
+            let parent = match value["parent_id"].as_str() {
+                Some(id) => fetch(&client, &format!("/api/projects/{id}"))
+                    .ok()
+                    .and_then(|parent| parent["key"].as_str().map(|key| format!("{key} ({id})")))
+                    .unwrap_or_else(|| id.to_owned()),
+                None => optional(None),
+            };
+            outln!("parent: {}", output::sanitize(&parent));
             outln!("archived: {}", output::timestamp(&value, "archived_at"));
             Ok(())
         }
@@ -279,6 +291,8 @@ pub fn project(command: ProjectCommand, json_output: bool) -> Result<(), CliErro
             description,
             repo_path,
             color,
+            parent,
+            clear_parent,
         } => {
             let mut body = Map::new();
             if let Some(key) = key {
@@ -295,6 +309,9 @@ pub fn project(command: ProjectCommand, json_output: bool) -> Result<(), CliErro
             }
             if let Some(color) = color {
                 body.insert("color".to_owned(), json!(color));
+            }
+            if clear_parent || parent.is_some() {
+                body.insert("parent".to_owned(), json!(parent));
             }
             if body.is_empty() {
                 return Err(CliError::usage("no editable fields provided"));

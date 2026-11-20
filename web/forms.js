@@ -381,7 +381,7 @@ export function openCardForm({ project, projects = [], labels = [], initialStatu
   return modal;
 }
 
-export function openProjectForm({ project = null, onSaved }) {
+export function openProjectForm({ project = null, projects = [], onSaved }) {
   const editing = Boolean(project);
   const key = el("input", {
     class: "input",
@@ -404,6 +404,20 @@ export function openProjectForm({ project = null, onSaved }) {
     rows: "3",
     value: project ? project.description : ""
   });
+  const currentParent = project?.parent_id || "";
+  const hasChildren = project && projects.some((item) => item.parent_id === project.id);
+  const parent = el("select", {
+    class: "input",
+    disabled: Boolean(hasChildren),
+    "aria-label": t("form.parentProject")
+  }, [
+    el("option", { value: "", text: t("form.noParentProject") }),
+    ...projects
+      .filter((item) => item.id === currentParent ||
+        (!item.archived_at && !item.parent_id && item.id !== project?.id))
+      .map((item) => el("option", { value: item.id, text: `${item.key} — ${item.name}` }))
+  ]);
+  parent.value = currentParent;
   const repoPath = el("input", {
     class: "input",
     type: "text",
@@ -449,6 +463,7 @@ export function openProjectForm({ project = null, onSaved }) {
       field(t("form.projectName"), name)
     ]),
     field(t("form.description"), description),
+    field(t("form.parentProject"), parent, hasChildren ? t("form.parentProjectDisabled") : null),
     el("div", { class: "form-row" }, [
       field(t("form.repoPath"), repoPath),
       field(t("form.color"), color)
@@ -489,6 +504,7 @@ export function openProjectForm({ project = null, onSaved }) {
       repo_path: repoPath.value.trim() || null,
       model: model.value.trim() || null
     };
+    if (!parent.disabled && parent.value !== currentParent) base.parent = parent.value || null;
     if (!base.key || !base.name) {
       showError(error, t("form.requiredFields"));
       return;

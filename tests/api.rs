@@ -3018,6 +3018,151 @@ async fn projects_crud_and_archive_filter() {
 }
 
 #[tokio::test]
+async fn project_hierarchy_enforces_one_level_and_protects_archiving() {
+    let app = TestApp::new();
+    let cookie = app.login().await;
+    let parent = app.create_project(&cookie, "ROOT").await;
+    let other = app.create_project(&cookie, "OTHER").await;
+    let child = app
+        .cookie_post(
+            "/api/projects",
+            Some(json!({"key": "WEB", "name": "Website", "parent": "root"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(child.status, StatusCode::CREATED);
+    assert_eq!(child.body["parent_id"], parent["id"]);
+    for (project, proposed_parent) in [
+        ("ROOT", "root"),
+        ("ROOT", "WEB"),
+        ("ROOT", "OTHER"),
+        ("OTHER", "WEB"),
+        ("WEB", "MISSING"),
+    ] {
+        let invalid = app
+            .cookie_patch(
+                &format!("/api/projects/{project}"),
+                json!({"parent": proposed_parent, "name": "Must not persist"}),
+                &cookie,
+            )
+            .await;
+        assert_eq!(
+            invalid.status,
+            StatusCode::BAD_REQUEST,
+            "{project}: {proposed_parent}"
+        );
+    }
+    let invalid_create = app
+        .cookie_post(
+            "/api/projects",
+            Some(json!({"key": "NEST", "name": "Nested", "parent": "WEB"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(invalid_create.status, StatusCode::BAD_REQUEST);
+    let child = app.get("/api/projects/WEB", Some(&cookie), None).await;
+    assert_eq!(child.body["name"], "Website");
+    assert_eq!(child.body["parent_id"], parent["id"]);
+
+    let blocked = app
+        .cookie_post("/api/projects/ROOT/archive", None, &cookie)
+        .await;
+    assert_eq!(blocked.status, StatusCode::CONFLICT);
+    let moved = app
+        .cookie_patch("/api/projects/WEB", json!({"parent": other["id"]}), &cookie)
+        .await;
+    assert_eq!(moved.status, StatusCode::OK);
+    assert_eq!(moved.body["parent_id"], other["id"]);
+    let archived = app
+        .cookie_post("/api/projects/ROOT/archive", None, &cookie)
+        .await;
+    assert_eq!(archived.status, StatusCode::OK);
+    let rejected = app
+        .cookie_patch("/api/projects/WEB", json!({"parent": "ROOT"}), &cookie)
+        .await;
+    assert_eq!(rejected.status, StatusCode::BAD_REQUEST);
+    let detached = app
+        .cookie_patch("/api/projects/WEB", json!({"parent": null}), &cookie)
+        .await;
+    assert_eq!(detached.status, StatusCode::OK);
+    assert_eq!(detached.body["parent_id"], Value::Null);
+}
+
+#[tokio::test]
+async fn parent_board_keeps_all_columns_and_only_includes_active_children() {
+    let app = TestApp::new();
+    let cookie = app.login().await;
+    let child = app.create_project(&cookie, "WEB").await;
+    let parent = app.create_project(&cookie, "ROOT").await;
+    app.create_project(&cookie, "OTHER").await;
+    for key in ["WEB", "OLD", "DOCS"] {
+        if key != "WEB" {
+            app.create_project(&cookie, key).await;
+        }
+        let linked = app
+            .cookie_patch(
+                &format!("/api/projects/{key}"),
+                json!({"parent": "ROOT"}),
+                &cookie,
+            )
+            .await;
+        assert_eq!(linked.status, StatusCode::OK);
+        app.create_task(&cookie, json!({"project_key": key, "title": key}))
+            .await;
+    }
+    app.create_task(
+        &cookie,
+        json!({"project_key": "ROOT", "title": "Parent card"}),
+    )
+    .await;
+    let dropped = app
+        .cookie_post(
+            "/api/tasks/WEB-1/move",
+            Some(json!({"status": "dropped"})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(dropped.status, StatusCode::OK);
+    let archived = app
+        .cookie_post("/api/projects/OLD/archive", None, &cookie)
+        .await;
+    assert_eq!(archived.status, StatusCode::OK);
+
+    let uri = format!("/api/board?parent={}", parent["id"].as_str().unwrap());
+    let board = app.get(&uri, Some(&cookie), None).await;
+    assert_eq!(board.status, StatusCode::OK);
+    let projects = board.body["projects"].as_array().unwrap();
+    let keys: Vec<_> = projects
+        .iter()
+        .map(|entry| entry["project"]["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["ROOT", "WEB", "DOCS"]);
+    assert_eq!(projects[0]["columns"]["backlog"][0]["reference"], "ROOT-1");
+    assert_eq!(projects[1]["project"]["id"], child["id"]);
+    assert_eq!(projects[1]["columns"]["dropped"][0]["reference"], "WEB-1");
+    for project in projects {
+        assert_eq!(project["columns"].as_object().unwrap().len(), 7);
+    }
+    let single = app
+        .get("/api/board?project=ROOT", Some(&cookie), None)
+        .await;
+    assert_eq!(single.body["projects"].as_array().unwrap().len(), 1);
+    let global = app.get("/api/board", Some(&cookie), None).await;
+    assert_eq!(global.body["projects"][0]["project"]["key"], "WEB");
+    assert_eq!(global.body["projects"][0]["columns"]["dropped"], json!([]));
+    for (uri, status) in [
+        ("/api/board?parent=OLD", StatusCode::NOT_FOUND),
+        ("/api/board?parent=UNKNOWN", StatusCode::NOT_FOUND),
+        (
+            "/api/board?parent=ROOT&project=WEB",
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        assert_eq!(app.get(uri, Some(&cookie), None).await.status, status);
+    }
+}
+
+#[tokio::test]
 async fn tasks_create_list_filters_and_refs() {
     let app = TestApp::new();
     let cookie = app.login().await;

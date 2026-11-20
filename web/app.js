@@ -343,6 +343,14 @@ function buildShell() {
     el("input", { type: "checkbox", checked: state.showAll }),
     el("span", { text: t("board.showAll") })
   ]);
+  const projectScope = el("select", {
+    class: "input input-compact project-scope",
+    "aria-label": t("board.projectScope"),
+    hidden: true
+  }, [
+    el("option", { value: "project", text: t("board.thisProject") }),
+    el("option", { value: "parent", text: t("board.includedProjects") })
+  ]);
 
   const topbar = el("header", { class: "topbar" }, [
     el("div", { class: "topbar-left" }, [
@@ -362,6 +370,7 @@ function buildShell() {
     el("div", { class: "topbar-right" }, [
       el("div", { class: "search-box" }, [icon("search", { size: 15 }), search]),
       globalToggle,
+      projectScope,
       newCard,
       state.me?.scope === "human"
         ? iconButton(t("imports.title"), "download", { onClick: () => navigate("/imports") })
@@ -433,6 +442,7 @@ function buildShell() {
     settings,
     logout,
     globalToggle,
+    projectScope,
     boardRegion,
     pageRegion,
     panelRoot
@@ -465,6 +475,10 @@ function buildShell() {
   globalToggle.querySelector("input").addEventListener("change", (event) => {
     state.showAll = event.target.checked;
     renderBoardView();
+  });
+  projectScope.addEventListener("change", () => {
+    if (!state.currentProjectKey) return;
+    navigate(`/p/${encodeURIComponent(state.currentProjectKey)}${projectScope.value === "parent" ? "?children=1" : ""}`);
   });
 
   document.removeEventListener("keydown", onGlobalKeyDown);
@@ -526,6 +540,12 @@ function renderChrome() {
     )
   );
   dom.globalToggle.hidden = route.name !== "global";
+  dom.projectScope.hidden = !state.boardReady || state.pageVisible ||
+    !["project", "task"].includes(route.name) ||
+    state.currentProjectKey !== (route.parent || route.key).toUpperCase() ||
+    !state.currentProjectId ||
+    !state.projects.some((project) => project.parent_id === state.currentProjectId);
+  dom.projectScope.value = isParentBoard() ? "parent" : "project";
   dom.search.value = state.search;
   dom.search.closest(".search-box").hidden = !isBoardRoute();
 
@@ -548,6 +568,10 @@ function isBoardRoute() {
   return ["home", "project", "task", "global"].includes(state.route.name);
 }
 
+function isParentBoard() {
+  return ["project", "task"].includes(state.route.name) && state.boards.length > 1;
+}
+
 function returnToBoardPath() {
   return boardPath();
 }
@@ -557,7 +581,7 @@ function boardPath() {
     state.currentProjectKey &&
     state.projects.some((project) => project.key === state.currentProjectKey)
   ) {
-    return `/p/${encodeURIComponent(state.currentProjectKey)}`;
+    return `/p/${encodeURIComponent(state.currentProjectKey)}${isParentBoard() ? "?children=1" : ""}`;
   }
   const last = localStorage.getItem(LS.lastProject);
   if (last && state.projects.some((project) => project.key === last)) {
@@ -570,7 +594,10 @@ function taskPath(reference) {
   if (!reference) return boardPath();
   const [key, number] = reference.split("-");
   if (!key || !number) return boardPath();
-  return `/p/${encodeURIComponent(key)}/task/${encodeURIComponent(number)}`;
+  const parent = isParentBoard() && state.boards.some((board) => board.project.key === key)
+    ? `?parent=${encodeURIComponent(state.currentProjectKey)}`
+    : "";
+  return `/p/${encodeURIComponent(key)}/task/${encodeURIComponent(number)}${parent}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -584,8 +611,9 @@ function decodePart(value) {
   }
 }
 
-function parseRoute(pathname) {
+function parseRoute(pathname, search) {
   const path = pathname.replace(/\/+$/, "") || "/";
+  const query = new URLSearchParams(search);
   if (path === "/" || path === "/index.html") return { name: "home" };
   if (path === "/global") return { name: "global" };
   if (path === "/inbox") return { name: "inbox" };
@@ -598,7 +626,9 @@ function parseRoute(pathname) {
   let match = path.match(/^\/p\/([^/]+)$/);
   if (match) {
     const key = decodePart(match[1]);
-    return key ? { name: "project", key } : { name: "not-found", path };
+    return key
+      ? { name: "project", key, includeChildren: query.get("children") === "1" }
+      : { name: "not-found", path };
   }
   match = path.match(/^\/p\/([^/]+)\/task\/(\d+)$/);
   if (match) {
@@ -607,6 +637,7 @@ function parseRoute(pathname) {
     return {
       name: "task",
       key,
+      parent: query.get("parent"),
       number: Number(match[2]),
       reference: `${key.toUpperCase()}-${Number(match[2])}`
     };
@@ -615,7 +646,7 @@ function parseRoute(pathname) {
 }
 
 function navigate(path, { replace = false } = {}) {
-  if (!replace && path === location.pathname) {
+  if (!replace && path === location.pathname + location.search) {
     // Re-render without adding a duplicate entry for the active tab/brand.
     renderRoute().catch((error) => {
       if (error.status !== 401) toastForError(error, t);
@@ -636,7 +667,7 @@ window.addEventListener("popstate", () => {
 });
 
 async function renderRoute() {
-  const route = parseRoute(location.pathname);
+  const route = parseRoute(location.pathname, location.search);
   state.route = route;
   const token = ++state.routeToken;
   renderChrome();
@@ -646,10 +677,8 @@ async function renderRoute() {
       await renderHome(token);
       break;
     case "project":
-      await renderProject(route.key, null, token);
-      break;
     case "task":
-      await renderProject(route.key, route, token);
+      await renderProject(route, token);
       break;
     case "global":
       await renderGlobal(token);
@@ -706,31 +735,48 @@ async function renderHome(token) {
   return token;
 }
 
-async function renderProject(key, taskRoute, token) {
+async function loadProjectBoards(route) {
+  const parent = route.includeChildren ? route.key : route.parent;
+  if (parent) {
+    try {
+      const { projects } = await api.parentBoard(parent);
+      if (projects.some((board) => board.project.key === route.key.toUpperCase())) {
+        return projects;
+      }
+    } catch (error) {
+      if (error.status !== 404) throw error;
+    }
+  }
+  const { projects } = await api.board(route.key);
+  return projects;
+}
+
+async function renderProject(route, token) {
   showBoardRegion();
   state.boardReady = false;
+  renderChrome();
   renderLoading(t("app.loading"));
   try {
-    const data = await api.board(key);
+    const boards = await loadProjectBoards(route);
     if (state.routeToken !== token) return;
-    const board = data.projects && data.projects[0];
+    const board = boards[0];
     if (!board) {
-      showProjectNotFound(key);
+      showProjectNotFound(route.key);
       return;
     }
     state.boardReady = true;
-    state.boards = [board];
+    state.boards = boards;
     state.currentProjectKey = board.project.key;
     state.currentProjectId = board.project.id;
     localStorage.setItem(LS.lastProject, board.project.key);
-    state.selectedRef = taskRoute ? `${board.project.key}-${taskRoute.number}` : null;
+    state.selectedRef = route.name === "task" ? route.reference : null;
     state.search = state.search || "";
     if (state.panel) state.panel.setLabels(state.labels);
     renderBoardView();
     renderChrome();
     rememberCards();
 
-    if (taskRoute) {
+    if (route.name === "task") {
       if (state.panel) {
         await state.panel.open(state.selectedRef, { force: true });
       }
@@ -740,7 +786,7 @@ async function renderProject(key, taskRoute, token) {
   } catch (error) {
     if (state.routeToken !== token) return;
     if (error.status === 404) {
-      showProjectNotFound(key);
+      showProjectNotFound(route.key);
     } else if (error.status !== 401) {
       showLoadError(error);
     }
@@ -813,7 +859,7 @@ function renderBoardView() {
   if (state.boardView.isDragging()) return;
   state.dom.boardRegion.hidden = false;
   state.dom.pageRegion.hidden = true;
-  const mode = state.route.name === "global" ? "global" : "project";
+  const mode = state.route.name === "global" ? "global" : isParentBoard() ? "parent" : "project";
   state.boardView.render(state.boards, {
     mode,
     search: state.search,
@@ -832,12 +878,15 @@ function showProjectNotFound(key) {
 }
 
 function showTaskNotFound(reference) {
+  const backPath = isParentBoard() || !state.currentProjectKey
+    ? boardPath()
+    : `/p/${encodeURIComponent(state.currentProjectKey)}`;
   showPageRegion();
   if (state.panel) state.panel.hide();
   showNotFoundPage(
     t("common.taskNotFoundTitle"),
     t("common.taskNotFoundBody", { ref: reference }),
-    state.currentProjectKey ? `/p/${encodeURIComponent(state.currentProjectKey)}` : boardPath()
+    backPath
   );
 }
 
@@ -1172,6 +1221,7 @@ async function renderSettingsProjects(token) {
                   class: "button button-primary",
                   onClick: () =>
                     openProjectForm({
+                      projects,
                       onSaved: () => {
                         renderSettingsProjects(token);
                         loadProjectsQuietly();
@@ -1245,6 +1295,7 @@ async function renderSettingsProjects(token) {
 }
 
 function renderProjectRow(project, archived, human, refresh) {
+  const parent = state.allProjects.find((item) => item.id === project.parent_id);
   const actions = [];
   const githubPanel = el("div", { class: "github-repositories" });
   const redminePanel = el("div", { class: "redmine-projects" });
@@ -1260,6 +1311,7 @@ function renderProjectRow(project, archived, human, refresh) {
           onClick: () => {
             openProjectForm({
               project,
+              projects: state.allProjects,
               onSaved: () => {
                 refresh();
                 loadProjectsQuietly();
@@ -1333,6 +1385,10 @@ function renderProjectRow(project, archived, human, refresh) {
       project.description
         ? el("p", { class: "muted settings-row-description", text: project.description })
         : null,
+      parent ? el("p", {
+        class: "muted settings-row-description",
+        text: t("settings.parentProject", { name: `${parent.key} — ${parent.name}` })
+      }) : null,
       project.repo_path ? el("code", { class: "settings-row-repo", text: project.repo_path }) : null,
       githubPanel,
       redminePanel
@@ -1978,7 +2034,7 @@ function afterProjectSaved(project) {
 function selectCard(card) {
   state.selectedRef = card.reference;
   const path = taskPath(card.reference);
-  if (location.pathname === path) {
+  if (location.pathname + location.search === path) {
     if (state.panel) state.panel.open(card.reference);
     return;
   }
@@ -1989,8 +2045,8 @@ function closePanel({ navigate: shouldNavigate = false } = {}) {
   if (state.panel) state.panel.hide();
   state.selectedRef = null;
   if (shouldNavigate && state.route.name === "task") {
-    const route = state.route;
-    history.replaceState({}, "", `/p/${encodeURIComponent(route.key)}`);
+    const path = isParentBoard() ? boardPath() : `/p/${encodeURIComponent(state.route.key)}`;
+    history.replaceState({}, "", path);
     renderRoute().catch(() => {});
   }
 }
@@ -2165,7 +2221,7 @@ function newCardFlow() {
     onCreated: (detail) => {
       applyDetailToStore(detail);
       if (detail.project_key) {
-        navigate(`/p/${encodeURIComponent(detail.project_key)}/task/${detail.number}`);
+        navigate(taskPath(detail.reference));
       }
     }
   });
@@ -2176,16 +2232,16 @@ async function refreshBoard() {
   const route = state.route;
   const token = state.routeToken;
   try {
-    let data;
+    let boards;
     if (route.name === "global") {
-      data = await api.board();
+      boards = (await api.board()).projects;
     } else if (route.key) {
-      data = await api.board(route.key);
+      boards = await loadProjectBoards(route);
     } else {
       return;
     }
     if (state.routeToken !== token || state.route !== route) return;
-    state.boards = data.projects || [];
+    state.boards = boards;
     if (route.name === "global" && !state.boards.length) {
       showPageRegion();
       renderNoProjects();
@@ -2528,9 +2584,9 @@ function applyEvent(type, data) {
         state.currentProjectKey = project.key;
         if (
           (state.route.name === "project" || state.route.name === "task") &&
-          project.key !== state.route.key
+          project.key !== (state.route.parent || state.route.key).toUpperCase()
         ) {
-          navigate(`/p/${encodeURIComponent(project.key)}`, { replace: true });
+          navigate(boardPath(), { replace: true });
           return;
         }
       }

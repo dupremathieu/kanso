@@ -265,7 +265,7 @@ function renderColumn(project, status, cards, options, mode) {
   }
 
   const footer =
-    status !== "dropped" && (mode === "project" || cards.length)
+    status !== "dropped" && (mode !== "global" || cards.length)
       ? el("div", { class: "column-footer" }, [quickAdd(project, status, options.onQuickAdd)])
       : null;
 
@@ -294,7 +294,7 @@ export function createBoardView(root, handlers) {
 
   function render(boards, options = {}) {
     current = { boards: boards || [], options: { ...current.options, ...options } };
-    const mode = current.options.mode === "global" ? "global" : "project";
+    const { mode } = current.options;
     const signature = `${mode}:${current.boards.map((board) => board.project.id).join(",")}`;
     const preserveScroll = signature === lastSignature;
     const scrollLeft = scroll.scrollLeft;
@@ -335,24 +335,21 @@ export function createBoardView(root, handlers) {
       const project = board.project;
       const columns = board.columns || {};
       const columnNodes = el("div", { class: "columns" });
+      let total = 0;
 
       for (const status of STATUSES) {
         if (mode === "global" && status === "dropped") continue;
+        const cards = (columns[status] || []).filter((card) => matchesSearch(card, current.options.search));
+        total += cards.length;
         if (mode === "global" && !current.options.showAll && !ACTIVE_STATUSES.includes(status)) {
           continue;
         }
-        const cards = (columns[status] || []).filter((card) => matchesSearch(card, current.options.search));
         columnNodes.append(
           renderColumn(project, status, cards, { ...current.options, ...handlers }, mode)
         );
       }
 
-      if (mode === "global") {
-        const total = STATUSES.reduce(
-          (sum, status) =>
-            (status === "dropped" ? 0 : (columns[status] || []).filter((card) => matchesSearch(card, current.options.search)).length) + sum,
-          0
-        );
+      if (mode !== "project") {
         scroll.append(
           el("section", { class: "project-group", dataset: { projectId: project.id } }, [
             el("header", { class: "project-group-header" }, [
@@ -655,7 +652,12 @@ export function createBoardView(root, handlers) {
       return;
     }
     if (drag && (!event.pointerId || event.pointerId === drag.pointerId)) {
-      finishDrag(true);
+      // In the parent view, releasing in a different project must not
+      // commit a placeholder left in the last valid column.
+      const overProject = current.options.mode === "parent"
+        ? document.elementFromPoint(event.clientX, event.clientY)?.closest(".project-group")
+        : null;
+      finishDrag(!overProject || overProject.dataset.projectId === drag.projectId);
     }
   }
 
