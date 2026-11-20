@@ -142,6 +142,9 @@ override the file per value; `KANSO_CONFIG` overrides its path.
 
 ```sh
 kanso project list | add --key ALP --name Alpha | show ALP | edit ALP --name …
+kanso project add --key WEB --name Website --parent ALP
+kanso project edit WEB --parent OTHER
+kanso project edit WEB --clear-parent
 kanso models list [--json]
 kanso task list [--project ALP] [--status todo] [--label bug] [--mine]
 kanso task show ALP-42
@@ -325,15 +328,22 @@ origin check; read-only GETs such as `/api/export.json` do not.
 | Method | Path | Notes |
 | --- | --- | --- |
 | `GET` | `/api/projects` | Active projects; `?archived=1` includes archived ones |
-| `POST` | `/api/projects` | `{key,name,description?,repo_path?,color?,model?}` |
+| `POST` | `/api/projects` | `{key,name,description?,repo_path?,color?,model?,parent?}` |
 | `GET` | `/api/projects/:id_or_key` | Case-insensitive key |
-| `PATCH` | `/api/projects/:id` | Name, description, key, colour, repo and OpenChamber fields |
-| `POST` | `/api/projects/:id/archive` | Idempotent |
+| `PATCH` | `/api/projects/:id` | Name, description, key, colour, repo, OpenChamber fields and `parent` |
+| `POST` | `/api/projects/:id/archive` | Idempotent; returns `409` if the project has active children |
 | `GET` | `/api/projects/:id_or_key/board` | `{project, columns}` for one project |
-| `GET` | `/api/board` | `{projects:[{project,columns}]}`; `?project=` limits it to one |
+| `GET` | `/api/board` | `{projects:[{project,columns}]}`; `?project=` selects one project, `?parent=` selects a parent and its active children |
 
 Project keys are 2–6 characters of `A-Z`/`0-9`, stored uppercase and unique
 case-insensitively.
+
+Set **Parent project** under **Settings → Projects**, or use `--parent KEY` in
+the CLI. The API accepts a key or ID as `parent` and returns `parent_id`; PATCH
+with `"parent": null` (CLI `--clear-parent`) detaches the project. Only active
+root projects can be selected as parents. Projects with children cannot become
+children themselves. Move, detach, or archive active children before archiving
+their parent; archiving does not cascade.
 
 Before dispatching a Kanso session, add the `need_spec` label to a card to
 permit specification questions; the label does not require them. Without that
@@ -497,6 +507,11 @@ web cards, which show `2/3` progress and a lock without fetching every detail.
 The global view hides Dropped and its cards (the unfiltered global API returns
 an empty `dropped` array). It lists active projects in `position` order;
 `?project=` resolves one project (archived or not), including its dropped cards.
+`?parent=` resolves an active project by key or ID, followed by its active
+direct children, with all seven columns intact. On a parent's web board,
+choose **Included projects** to see these sections. The default **This
+project** view still shows the parent alone. Searching matches across the
+sections, while quick add and drag-and-drop act within a single project.
 
 ### Events
 

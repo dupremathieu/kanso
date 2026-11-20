@@ -24,6 +24,7 @@ pub const MIGRATIONS: &[&str] = &[
     include_str!("migrations/v11.sql"),
     include_str!("migrations/v12.sql"),
     include_str!("migrations/v13.sql"),
+    include_str!("migrations/v14.sql"),
 ];
 
 /// Open the database and apply the connection-level pragmas.
@@ -297,7 +298,7 @@ mod tests {
         let version: u32 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("read user_version");
-        assert_eq!(version, 13);
+        assert_eq!(version, MIGRATIONS.len() as u32);
 
         let mut statement = connection
             .prepare(
@@ -351,6 +352,7 @@ mod tests {
             "checklist_task",
             "comments_task",
             "dependencies_rev",
+            "projects_parent_idx",
             "tasks_board",
             "tasks_session",
         ] {
@@ -366,13 +368,48 @@ mod tests {
         let path = dir.path().join("kanso.db");
         let mut connection = open(&path).expect("open database");
 
-        assert_eq!(migrate(&mut connection).expect("first migration"), 13);
-        assert_eq!(migrate(&mut connection).expect("second migration"), 13);
+        let latest = MIGRATIONS.len() as u32;
+        assert_eq!(migrate(&mut connection).expect("first migration"), latest);
+        assert_eq!(migrate(&mut connection).expect("second migration"), latest);
 
         let version: u32 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("read user_version");
-        assert_eq!(version, 13);
+        assert_eq!(version, latest);
+    }
+
+    #[test]
+    fn upgrade_v13_keeps_existing_projects_independent() {
+        let dir = TempDir::new();
+        let mut connection = open(&dir.path().join("kanso.db")).unwrap();
+        apply(&mut connection, &MIGRATIONS[..13]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO projects (id,key,name,position,created_at,updated_at)
+                 VALUES ('root','ROOT','Root',1,1,1), ('web','WEB','Web',2,1,1);",
+            )
+            .unwrap();
+        assert_eq!(migrate(&mut connection).unwrap(), MIGRATIONS.len() as u32);
+        let independent: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM projects WHERE parent_id IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(independent, 2);
+        assert!(connection
+            .execute(
+                "UPDATE projects SET parent_id = 'missing' WHERE id = 'web'",
+                []
+            )
+            .is_err());
+        connection
+            .execute(
+                "UPDATE projects SET parent_id = 'root' WHERE id = 'web'",
+                [],
+            )
+            .unwrap();
     }
 
     #[test]
@@ -381,7 +418,7 @@ mod tests {
         let mut connection = open(&dir.path().join("kanso.db")).unwrap();
         apply(&mut connection, &MIGRATIONS[..12]).unwrap();
         connection.execute_batch("INSERT INTO projects (id,key,name,position,created_at,updated_at) VALUES ('p','RDM','Project',1,1,1);").unwrap();
-        assert_eq!(migrate(&mut connection).unwrap(), 13);
+        assert_eq!(migrate(&mut connection).unwrap(), MIGRATIONS.len() as u32);
         let name: String = connection
             .query_row("SELECT name FROM projects WHERE id='p'", [], |r| r.get(0))
             .unwrap();
@@ -404,7 +441,7 @@ mod tests {
         let mut connection = open(&dir.path().join("kanso.db")).unwrap();
         apply(&mut connection, &MIGRATIONS[..10]).unwrap();
         connection.execute_batch("INSERT INTO projects (id,key,name,position,created_at,updated_at) VALUES ('p','ABC','Project',1,1,1); INSERT INTO task_reference_aliases (project_key,number,project_id,task_id) VALUES ('OLD',1,'p',NULL);").unwrap();
-        assert_eq!(migrate(&mut connection).unwrap(), 13);
+        assert_eq!(migrate(&mut connection).unwrap(), MIGRATIONS.len() as u32);
         let project: String = connection.query_row("SELECT project_id FROM task_reference_aliases WHERE project_key='OLD' AND number=1", [], |row| row.get(0)).unwrap();
         assert_eq!(project, "p");
         let count: i64 = connection
@@ -449,7 +486,7 @@ mod tests {
                 [],
             )
             .unwrap();
-        assert_eq!(migrate(&mut connection).unwrap(), 13);
+        assert_eq!(migrate(&mut connection).unwrap(), MIGRATIONS.len() as u32);
         let template: Option<String> = connection
             .query_row(
                 "SELECT prompt_template FROM labels WHERE id = 'l'",
@@ -529,7 +566,10 @@ mod tests {
             )
             .expect("seed v1 rows");
 
-        assert_eq!(migrate(&mut connection).expect("migrate to latest"), 13);
+        assert_eq!(
+            migrate(&mut connection).expect("migrate to latest"),
+            MIGRATIONS.len() as u32
+        );
 
         let mut statement = connection
             .prepare("PRAGMA index_info('checklist_task')")
@@ -583,7 +623,10 @@ mod tests {
             )
             .expect("seed v2 rows");
 
-        assert_eq!(migrate(&mut connection).expect("migrate to latest"), 13);
+        assert_eq!(
+            migrate(&mut connection).expect("migrate to latest"),
+            MIGRATIONS.len() as u32
+        );
 
         let mut statement = connection
             .prepare("PRAGMA table_info('comments')")
@@ -620,7 +663,7 @@ mod tests {
         let mut connection = open(&dir.path().join("kanso.db")).unwrap();
         apply(&mut connection, &MIGRATIONS[..4]).unwrap();
         connection.execute_batch("INSERT INTO projects (id,key,name,position,created_at,updated_at) VALUES ('p','ABC','Existing',1,1,1); INSERT INTO tasks (id,project_id,number,title,status,rank,created_at,updated_at) VALUES ('t','p',1,'Existing','todo',1,1,1), ('u','p',2,'Second','todo',2,1,1);").unwrap();
-        assert_eq!(migrate(&mut connection).unwrap(), 13);
+        assert_eq!(migrate(&mut connection).unwrap(), MIGRATIONS.len() as u32);
         assert_eq!(
             connection
                 .query_row("SELECT title FROM tasks WHERE id='t'", [], |r| r

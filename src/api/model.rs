@@ -19,11 +19,12 @@ pub struct Project {
     pub archived_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
+    pub parent_id: Option<String>,
 }
 
 pub const PROJECT_COLUMNS: &str = "id, key, name, description, repo_path, color, position, \
      openchamber_project_id, agent, model, base_branch, worktree, prompt_template, archived_at, \
-     created_at, updated_at";
+     created_at, updated_at, parent_id";
 
 impl Project {
     pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
@@ -44,6 +45,7 @@ impl Project {
             archived_at: row.get(13)?,
             created_at: row.get(14)?,
             updated_at: row.get(15)?,
+            parent_id: row.get(16)?,
         })
     }
 }

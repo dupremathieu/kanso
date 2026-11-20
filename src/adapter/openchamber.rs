@@ -959,6 +959,7 @@ mod tests {
             archived_at: None,
             created_at: 1,
             updated_at: 1,
+            parent_id: None,
         }
     }
 

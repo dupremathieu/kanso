@@ -225,6 +225,9 @@ pub enum ProjectCommand {
         repo_path: Option<String>,
         #[arg(long)]
         color: Option<String>,
+        /// Parent project key or ID.
+        #[arg(long)]
+        parent: Option<String>,
     },
     /// Show one project by key or id.
     Show { reference: String },
@@ -241,6 +244,12 @@ pub enum ProjectCommand {
         repo_path: Option<String>,
         #[arg(long)]
         color: Option<String>,
+        /// Parent project key or ID.
+        #[arg(long)]
+        parent: Option<String>,
+        /// Remove the current parent link.
+        #[arg(long, conflicts_with = "parent")]
+        clear_parent: bool,
     },
 }
 

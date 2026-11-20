@@ -15,6 +15,7 @@ use crate::server::AppState;
 #[derive(Deserialize)]
 pub struct BoardQuery {
     project: Option<String>,
+    parent: Option<String>,
 }
 
 fn load_board(
@@ -106,15 +107,34 @@ pub async fn global(
     _auth: Auth,
     ApiQuery(query): ApiQuery<BoardQuery>,
 ) -> Result<Json<GlobalBoard>, ApiError> {
+    if query.project.is_some() && query.parent.is_some() {
+        return Err(ApiError::validation(
+            "use either project or parent, not both",
+        ));
+    }
     let boards = state
         .db
         .call(move |connection| {
-            let global_view = query.project.is_none();
+            let global_view = query.project.is_none() && query.parent.is_none();
             let projects = if let Some(reference) = &query.project {
                 let Some(project) = project_by_ref(connection, reference)? else {
                     return Ok(None);
                 };
                 vec![project]
+            } else if let Some(reference) = &query.parent {
+                let Some(parent) = project_by_ref(connection, reference)?
+                    .filter(|project| project.archived_at.is_none())
+                else {
+                    return Ok(None);
+                };
+                let mut statement = connection.prepare(&format!(
+                    "SELECT {PROJECT_COLUMNS} FROM projects
+                     WHERE parent_id = ?1 AND archived_at IS NULL ORDER BY position, id"
+                ))?;
+                let children = statement.query_map([&parent.id], Project::from_row)?;
+                std::iter::once(Ok(parent))
+                    .chain(children)
+                    .collect::<rusqlite::Result<Vec<_>>>()?
             } else {
                 let mut statement = connection.prepare(&format!(
                     "SELECT {PROJECT_COLUMNS} FROM projects

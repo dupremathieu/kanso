@@ -1383,6 +1383,50 @@ fn complete_environment_skips_a_broken_config_file() {
 }
 
 #[test]
+fn project_commands_manage_parent_links() {
+    let server = TestServer::start();
+    let human = server.create_token("human-cli", "human");
+    let run = |args: &[&str]| command(&server, Some(&human), args);
+    let root = run(&[
+        "project", "add", "--key", "ROOT", "--name", "Root", "--json",
+    ]);
+    assert_exit(&root, 0);
+    let root = json_stdout(&root);
+    let other = run(&[
+        "project", "add", "--key", "OTHER", "--name", "Other", "--json",
+    ]);
+    assert_exit(&other, 0);
+    let other = json_stdout(&other);
+    let child = run(&[
+        "project", "add", "--key", "WEB", "--name", "Website", "--parent", "ROOT", "--json",
+    ]);
+    assert_exit(&child, 0);
+    assert_eq!(json_stdout(&child)["parent_id"], root["id"]);
+
+    let changed = run(&["project", "edit", "WEB", "--parent", "OTHER", "--json"]);
+    assert_exit(&changed, 0);
+    assert_eq!(json_stdout(&changed)["parent_id"], other["id"]);
+    let show = run(&["project", "show", "WEB"]);
+    assert_exit(&show, 0);
+    assert!(stdout(&show).contains(&format!(
+        "parent: OTHER ({})",
+        other["id"].as_str().unwrap()
+    )));
+    let conflict = run(&[
+        "project",
+        "edit",
+        "WEB",
+        "--parent",
+        "ROOT",
+        "--clear-parent",
+    ]);
+    assert_exit(&conflict, 1);
+    let cleared = run(&["project", "edit", "WEB", "--clear-parent", "--json"]);
+    assert_exit(&cleared, 0);
+    assert_eq!(json_stdout(&cleared)["parent_id"], Value::Null);
+}
+
+#[test]
 fn project_commands_and_task_edit_work() {
     let server = TestServer::start();
     let human = server.create_token("human-cli", "human");

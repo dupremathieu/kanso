@@ -34,6 +34,7 @@ pub struct CreateProject {
     color: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    parent: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -54,6 +55,8 @@ pub struct UpdateProject {
     #[serde(default, deserialize_with = "deserialize_present")]
     prompt_template: Option<Option<String>>,
     worktree: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    parent: Option<Option<String>>,
 }
 
 pub fn normalise_key(raw: &str) -> Result<String, ApiError> {
@@ -123,6 +126,44 @@ pub(super) fn project_by_ref(
         .map_err(Into::into)
 }
 
+fn has_children(
+    connection: &rusqlite::Connection,
+    id: &str,
+    active_only: bool,
+) -> rusqlite::Result<bool> {
+    connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM projects
+         WHERE parent_id = ?1 AND (NOT ?2 OR archived_at IS NULL))",
+        params![id, active_only],
+        |row| row.get(0),
+    )
+}
+
+fn resolve_parent(
+    connection: &rusqlite::Connection,
+    id: &str,
+    reference: &str,
+) -> crate::error::Result<Result<String, ApiError>> {
+    let Some(parent) = project_by_ref(connection, reference.trim())? else {
+        return Ok(Err(ApiError::validation("parent project not found")));
+    };
+    let error = if parent.id == id {
+        Some("a project cannot be its own parent")
+    } else if parent.archived_at.is_some() {
+        Some("the parent project must be active")
+    } else if parent.parent_id.is_some() {
+        Some("a child project cannot be a parent")
+    } else if has_children(connection, id, false)? {
+        Some("a project with children cannot have a parent")
+    } else {
+        None
+    };
+    Ok(match error {
+        Some(message) => Err(ApiError::validation(message)),
+        None => Ok(parent.id),
+    })
+}
+
 pub async fn list(
     State(state): State<AppState>,
     _auth: Auth,
@@ -184,7 +225,7 @@ pub async fn create(
     let id = ids::uuid_v4()?;
     let now = super::now_millis();
 
-    let created = state
+    let project = state
         .db
         .call(move |connection| {
             let transaction = connection.transaction()?;
@@ -197,8 +238,15 @@ pub async fn create(
                 .optional()?
                 .is_some();
             if exists {
-                return Ok(None);
+                return Ok(Err(ApiError::conflict("a project with this key already exists")));
             }
+            let parent_id = match payload.parent {
+                Some(reference) => match resolve_parent(&transaction, &id, &reference)? {
+                    Ok(parent_id) => Some(parent_id),
+                    Err(error) => return Ok(Err(error)),
+                },
+                None => None,
+            };
             let position: f64 = transaction.query_row(
                 "SELECT COALESCE(MAX(position), 0) + 1 FROM projects",
                 [],
@@ -206,8 +254,8 @@ pub async fn create(
             )?;
             transaction.execute(
                 "INSERT INTO projects
-                 (id, key, name, description, repo_path, color, position, model, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+                 (id, key, name, description, repo_path, color, position, model, created_at, updated_at, parent_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10)",
                 params![
                     id,
                     key,
@@ -217,32 +265,22 @@ pub async fn create(
                     color,
                     position,
                     model,
-                    now
+                    now,
+                    parent_id
                 ],
             )?;
             let project = project_by_ref(&transaction, &id)?
                 .ok_or_else(|| crate::error::Error::msg("created project missing"))?;
             transaction.commit()?;
-            Ok(Some(project))
+            Ok(Ok(project))
         })
-        .await?;
+        .await??;
 
-    match created {
-        Some(project) => {
-            state.publish(
-                "project.created",
-                serde_json::json!({ "project": &project }),
-            );
-            Ok((StatusCode::CREATED, Json(project)).into_response())
-        }
-        None => Err(ApiError::conflict("a project with this key already exists")),
-    }
-}
-
-enum UpdateOutcome {
-    Updated(Box<Project>),
-    Conflict,
-    NotFound,
+    state.publish(
+        "project.created",
+        serde_json::json!({ "project": &project }),
+    );
+    Ok((StatusCode::CREATED, Json(project)).into_response())
 }
 
 pub async fn update(
@@ -270,18 +308,19 @@ pub async fn update(
         && !model_present
         && payload.base_branch.is_none()
         && payload.prompt_template.is_none()
-        && payload.worktree.is_none();
+        && payload.worktree.is_none()
+        && payload.parent.is_none();
     if empty {
         return Err(ApiError::validation("no editable fields provided"));
     }
 
     let now = super::now_millis();
-    let outcome = state
+    let project = state
         .db
         .call(move |connection| {
             let transaction = connection.transaction()?;
             let Some(mut project) = project_by_ref(&transaction, &reference)? else {
-                return Ok(UpdateOutcome::NotFound);
+                return Ok(Err(ApiError::not_found("project not found")));
             };
             if let Some(ref key) = key {
                 let duplicate = transaction
@@ -293,7 +332,7 @@ pub async fn update(
                     .optional()?
                     .is_some();
                 if duplicate {
-                    return Ok(UpdateOutcome::Conflict);
+                    return Ok(Err(ApiError::conflict("a project with this key already exists")));
                 }
                 transaction.execute(
                     "UPDATE projects SET key = ?1 WHERE id = ?2",
@@ -371,29 +410,35 @@ pub async fn update(
                 )?;
                 project.worktree = worktree;
             }
+            if let Some(parent) = payload.parent {
+                let parent_id = match parent {
+                    Some(reference) => match resolve_parent(&transaction, &project.id, &reference)? {
+                        Ok(parent_id) => Some(parent_id),
+                        Err(error) => return Ok(Err(error)),
+                    },
+                    None => None,
+                };
+                transaction.execute(
+                    "UPDATE projects SET parent_id = ?1 WHERE id = ?2",
+                    params![parent_id, project.id],
+                )?;
+                project.parent_id = parent_id;
+            }
             transaction.execute(
                 "UPDATE projects SET updated_at = ?1 WHERE id = ?2",
                 params![now, project.id],
             )?;
             project.updated_at = now;
             transaction.commit()?;
-            Ok(UpdateOutcome::Updated(Box::new(project)))
+            Ok(Ok(project))
         })
-        .await?;
+        .await??;
 
-    match outcome {
-        UpdateOutcome::Updated(project) => {
-            state.publish(
-                "project.updated",
-                serde_json::json!({ "project": &project }),
-            );
-            Ok(Json(*project))
-        }
-        UpdateOutcome::Conflict => {
-            Err(ApiError::conflict("a project with this key already exists"))
-        }
-        UpdateOutcome::NotFound => Err(ApiError::not_found("project not found")),
-    }
+    state.publish(
+        "project.updated",
+        serde_json::json!({ "project": &project }),
+    );
+    Ok(Json(project))
 }
 
 pub async fn archive(
@@ -408,8 +453,13 @@ pub async fn archive(
         .call(move |connection| {
             let transaction = connection.transaction()?;
             let Some(project) = project_by_ref(&transaction, &reference)? else {
-                return Ok(None);
+                return Ok(Err(ApiError::not_found("project not found")));
             };
+            if has_children(&transaction, &project.id, true)? {
+                return Ok(Err(ApiError::conflict(
+                    "move, detach or archive active child projects first",
+                )));
+            }
             transaction.execute(
                 "UPDATE projects
                  SET archived_at = COALESCE(archived_at, ?1), updated_at = ?1
@@ -418,10 +468,9 @@ pub async fn archive(
             )?;
             let project = project_by_ref(&transaction, &project.id)?;
             transaction.commit()?;
-            Ok(project)
+            Ok(project.ok_or_else(|| ApiError::not_found("project not found")))
         })
-        .await?
-        .ok_or_else(|| ApiError::not_found("project not found"))?;
+        .await??;
     state.publish(
         "project.archived",
         serde_json::json!({ "project": &project }),
